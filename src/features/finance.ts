@@ -12,7 +12,7 @@ const CACHE_FILE = "./data/finance-cache.json";
 
 interface FinanceCache {
   date: string;       // YYYY-MM-DD IST
-  gold22k: number;    // ₹ per 10g
+  gold22k: number;    // ₹ per gram
   sensex: number;     // index value
 }
 
@@ -44,14 +44,14 @@ async function yahooPrice(symbol: string): Promise<number | null> {
 }
 
 async function fetchGold22k(): Promise<number | null> {
-  // Gold futures (USD/troy oz) + USD→INR conversion → 22K per 10g
+  // Gold futures (USD/troy oz) + USD→INR conversion → 22K per gram
   const [goldUSD, usdINR] = await Promise.all([
     yahooPrice("GC=F"),
     yahooPrice("USDINR=X"),
   ]);
   if (!goldUSD || !usdINR) return null;
   const gold24kPerGram = (goldUSD * usdINR) / 31.1035;
-  return Math.round(gold24kPerGram * (22 / 24) * 10);
+  return Math.round(gold24kPerGram * (22 / 24));
 }
 
 async function fetchSensex(): Promise<number | null> {
@@ -98,22 +98,31 @@ export async function sendFinanceUpdate(): Promise<string | null> {
 
   // Build context string for Claude tip
   const goldCtx = gold22k
-    ? `Gold 22K ₹${gold22k.toLocaleString("en-IN")}/10g${goldDiff !== null ? ` (${goldDiff >= 0 ? "up" : "down"} ₹${Math.abs(goldDiff).toLocaleString("en-IN")})` : ""}`
+    ? `Gold 22K ₹${gold22k.toLocaleString("en-IN")}/g${goldDiff !== null ? ` (${goldDiff >= 0 ? "up" : "down"} ₹${Math.abs(goldDiff).toLocaleString("en-IN")}/g)` : ""}`
     : "";
   const sensexCtx = sensex
     ? `Sensex ${sensex.toLocaleString("en-IN")}${sensexDiff !== null ? ` (${sensexDiff >= 0 ? "up" : "down"} ${Math.abs(sensexDiff).toLocaleString("en-IN")} pts)` : ""}`
     : "";
 
+  // Check if market has a significant move worth calling out
+  const goldSignificant = goldDiff !== null && Math.abs(goldDiff) >= 100; // ₹100/g swing
+  const sensexSignificant = sensexDiff !== null && Math.abs(sensexDiff / (sensex ?? 1)) >= 0.02; // 2%+ move
+  const marketNote = (goldSignificant || sensexSignificant)
+    ? `Today's notable move: ${[goldCtx, sensexCtx].filter(Boolean).join(", ")}. You can reference this if it directly connects to the tip.`
+    : "";
+
   const tip = await generateStructured(
-    `Give ONE practical, specific investment or personal finance tip for a Tamil young adult (age 20-35) in India today.
-Market context: ${[goldCtx, sensexCtx].filter(Boolean).join(", ")}.
+    `Give ONE practical, specific investment or personal finance tip for a Tamil young adult (age 20-35) in India.
+
+${marketNote}
 
 Rules:
 - Write in Tanglish (Tamil in English letters)
 - 2-3 sentences MAX
-- Must be actionable (e.g. "Indha week SIP amount double pannu", "Gold ETF vs physical gold — idhu nalla time", "Emergency fund 3 months expense ready-aa?")
-- Reference today's market data naturally if relevant
-- Genuinely useful, not generic — surprise them with something specific
+- Rotate across these topics naturally (don't always pick the same one): SIP investing, index funds, emergency fund, term insurance, gold ETF vs physical gold, avoiding lifestyle inflation, credit score, UPI/digital safety, tax saving (80C/NPS), debt repayment, tracking expenses, salary negotiation, side income ideas
+- Must be actionable and specific — not generic ("invest wisely" is not acceptable)
+- Surprise them with something non-obvious or often overlooked
+- Only mention today's market data if there's a significant move AND the tip directly connects to it
 - No disclaimers, no "this is not financial advice"
 
 Output: Just the tip text, nothing else.`
@@ -126,7 +135,7 @@ Output: Just the tip text, nothing else.`
   msg += `_${dateLabel}_\n\n`;
 
   if (gold22k) {
-    msg += `🥇 *Gold 22K:* ₹${gold22k.toLocaleString("en-IN")}/10g`;
+    msg += `🥇 *Gold 22K:* ₹${gold22k.toLocaleString("en-IN")}/g`;
     if (goldDiff !== null) msg += `  ${diffLabel(goldDiff, "₹")}`;
     msg += "\n";
   }
