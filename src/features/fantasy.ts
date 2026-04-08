@@ -55,9 +55,10 @@ async function getState(matchId: string) {
 }
 
 async function saveState(matchId: string, update: Record<string, unknown>) {
-  await supabase
+  const { error } = await supabase
     .from("ba_fantasy_state")
     .upsert({ match_id: matchId, ...update }, { onConflict: "match_id" });
+  if (error) throw new Error(`saveState failed for ${matchId}: ${error.message}`);
 }
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -249,7 +250,8 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     const xiData = await botFetch(`/playing-xi?match_id=${state.match_id}`);
     if (!xiData?.match) continue;
 
-    const hasToss = xiData.match.toss_winner || xiData.playing_xi?.home?.length > 0;
+    // Require actual toss_winner — probable XI without toss must not trigger this
+    const hasToss = !!xiData.match.toss_winner;
     if (!hasToss) continue;
 
     await saveState(state.match_id, { toss_notified_at: new Date().toISOString() });

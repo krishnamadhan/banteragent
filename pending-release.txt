@@ -1,0 +1,7 @@
+🐛 *Bug Fix — Toss spam*
+
+Bot was sending "TOSS RESULT!" messages 2+ hours before the actual toss, and spamming the group repeatedly. Fixed:
+• Now only sends the toss announcement when a toss winner is actually confirmed (not just probable XI)
+• DB write failure no longer causes repeated spam — bot stops retrying if it can't save the notification state
+
+Deploy: restart bot.
