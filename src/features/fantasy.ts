@@ -281,9 +281,35 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
   if (!summary?.match) return null;
 
   const { match, top_performers } = summary;
+
+  // Match is done — send final results then mark completed
   if (match.status === "completed" || match.status === "in_review") {
+    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
     await saveState(state.match_id, { completed_at: new Date().toISOString() });
+
+    let msg = `🏁 *MATCH OVER!* ${state.team_home} vs ${state.team_away}\n\n`;
+    if (match.result_summary) msg += `📢 ${match.result_summary}\n\n`;
+
+    if (lb?.leaderboard?.length) {
+      msg += `🏆 *FANTASY FINAL STANDINGS*\n`;
+      const medals = ["🥇", "🥈", "🥉"];
+      lb.leaderboard.forEach((e: any, i: number) => {
+        const medal = medals[i] ?? `${i + 1}.`;
+        msg += `${medal} *${e.display_name}* — ${e.points} pts`;
+        if (e.prize_won > 0) msg += ` · 🎉 Won ${e.prize_won} pts`;
+        msg += `\n`;
+        if (e.team_name) msg += `   _${e.team_name}_\n`;
+      });
+    }
+
+    if (top_performers?.length) {
+      msg += `\n⭐ *Top performer:* ${top_performers[0].name} — ${top_performers[0].points} pts\n`;
+    }
+
+    msg += `\nGG everyone! 🏏`;
+    return msg;
   }
+
   if (match.status !== "live") return null;
 
   const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
