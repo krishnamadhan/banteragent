@@ -1,7 +1,15 @@
-🐛 *Bug Fix — Toss spam*
+🚀 *Fantasy Bot Update — April 2026*
 
-Bot was sending "TOSS RESULT!" messages 2+ hours before the actual toss, and spamming the group repeatedly. Fixed:
-• Now only sends the toss announcement when a toss winner is actually confirmed (not just probable XI)
-• DB write failure no longer causes repeated spam — bot stops retrying if it can't save the notification state
+*Critical Fix:* Entry fee bug — bot contest was charging ₹1000 but awarding ₹0. All users who paid have been refunded. Contests are now free (bragging rights only). 💸
 
-Deploy: restart bot.
+*New Feature:* !fantasy diff — Compare any two teams side by side! Different players first, then captain/VC, then common players at the bottom. Use `!fantasy diff` for top 2, or `!fantasy diff Krish Madhan` to compare specific teams.
+
+*Bug Fixes:*
+- Double-header days fixed — leaderboard/join/diff now shows the LIVE match, not the next scheduled one
+- Score sync on leaderboard — !fantasy lb now syncs live scores first before showing standings
+- IPL matches now prioritised in !cricket command
+- Contest auto-creation window extended — won't miss matches if bot restarts mid-window
+- Playing XI auto-detected from toss — no more manual !fantasy lock needed for live updates
+- Toss notification spam fixed
+
+*Deploy note for admin:* After deploying, call POST /api/admin/bot-contest-refund once to issue retroactive refunds for past bot contests.

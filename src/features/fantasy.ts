@@ -61,6 +61,42 @@ async function saveState(matchId: string, update: Record<string, unknown>) {
   if (error) throw new Error(`saveState failed for ${matchId}: ${error.message}`);
 }
 
+/**
+ * Returns the "active" contest state for a group.
+ *
+ * On a double-header day, ORDER BY scheduled_at DESC picks the LATER match
+ * (the one still in the future), not the one currently live.
+ *
+ * Correct priority:
+ *   1. Most recently STARTED, not-yet-completed match (scheduled_at ≤ now)
+ *   2. Soonest UPCOMING match (scheduled_at > now)
+ */
+async function getActiveState(groupId: string) {
+  const { data: states } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .not("announced_at", "is", null)
+    .is("completed_at", null);
+
+  if (!states?.length) return null;
+
+  const now = Date.now();
+  const started = states.filter((s) => new Date(s.scheduled_at).getTime() <= now);
+  const future  = states.filter((s) => new Date(s.scheduled_at).getTime() >  now);
+
+  if (started.length) {
+    // Most recently started first
+    return started.sort(
+      (a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime()
+    )[0]!;
+  }
+  // Nothing live yet — soonest upcoming
+  return future.sort(
+    (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+  )[0] ?? null;
+}
+
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
 function timeUntil(isoDate: string): string {
@@ -183,20 +219,27 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
   const data = await botFetch("/upcoming");
   if (!data?.matches?.length) return null;
 
-  const THREE_HOURS = 3 * 60 * 60 * 1000;
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
 
   for (const match of data.matches) {
-    if (match.status !== "scheduled" && match.status !== "open") continue;
+    // Allow scheduled/open (pre-match) — locked/live means we missed the window
+    // but we still try to announce so users can see the leaderboard
+    const isAnnounceable = ["scheduled", "open", "locked", "live"].includes(match.status);
+    if (!isAnnounceable) continue;
 
     const msUntil = new Date(match.scheduled_at).getTime() - Date.now();
-    if (msUntil > THREE_HOURS + 5 * 60 * 1000) continue; // more than 3h5m away → skip
-    if (msUntil < 0) continue; // already started
+
+    // Too far in the future — wait until 6h before
+    if (msUntil > SIX_HOURS + 5 * 60 * 1000) continue;
+
+    // Match started more than 4h ago — too late to create a contest
+    if (msUntil < -4 * 60 * 60 * 1000) continue;
 
     // Check if already announced
     const state = await getState(match.id);
     if (state?.announced_at) continue; // already done
 
-    // Create group contest
+    // Create group contest (idempotent — returns existing if already in DB)
     const contestData = await botFetch("/contest", {
       method: "POST",
       body: JSON.stringify({ match_id: match.id, group_name: "Squad Goals" }),
@@ -204,11 +247,18 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
 
     const contest = contestData?.contest;
 
-    // Save state
+    if (!contest?.id) {
+      // Contest creation failed (e.g. match already locked on app side) — do NOT mark
+      // as announced so the next cron cycle retries
+      console.error(`Fantasy contest creation failed for ${match.id}:`, contestData?.error ?? "no contest returned");
+      continue;
+    }
+
+    // Only mark announced once we have a real contest
     await saveState(match.id, {
       group_id: groupId,
-      contest_id: contest?.id ?? null,
-      invite_code: contest?.invite_code ?? null,
+      contest_id: contest.id,
+      invite_code: contest.invite_code ?? null,
       team_home: match.team_home,
       team_away: match.team_away,
       scheduled_at: match.scheduled_at,
@@ -268,11 +318,19 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
 export async function sendLiveUpdate(groupId: string): Promise<string | null> {
   if (!BOT_SECRET) return null;
 
+  const now = new Date().toISOString();
+
+  // Trigger live updates when:
+  //   a) admin ran !fantasy lock  (locked_at set), OR
+  //   b) toss happened + scheduled_at passed (auto-detect match going live)
+  // Previously required locked_at, which meant live updates never fired unless
+  // someone manually typed !fantasy lock in the group.
   const { data: states } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
-    .not("locked_at", "is", null)
+    .or("locked_at.not.is.null,toss_notified_at.not.is.null")
+    .lte("scheduled_at", now)   // match time has passed
     .is("completed_at", null);
 
   if (!states?.length) return null;
@@ -346,19 +404,97 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
   return msg || null;
 }
 
+// ─── Team diff formatter ─────────────────────────────────────────────────────
+
+function roleEmoji(role: string): string {
+  switch (role) {
+    case "WK":   return "🧤";
+    case "BAT":  return "🏏";
+    case "AR":   return "⚡";
+    case "BOWL": return "🎯";
+    default:     return "•";
+  }
+}
+
+function formatDiff(data: any): string {
+  const { team1, team2, only_in_1, only_in_2, common } = data;
+
+  const name1 = team1.display_name + (team1.rank ? ` (#${team1.rank})` : "");
+  const name2 = team2.display_name + (team2.rank ? ` (#${team2.rank})` : "");
+
+  const sep = "━━━━━━━━━━━━━━━━━━";
+  let msg = `🔄 *TEAM DIFF*\n${name1} vs ${name2}\n\n`;
+
+  // ── Different players ──
+  msg += `${sep}\n🔀 *DIFFERENT PLAYERS*\n${sep}\n`;
+
+  if (!only_in_1.length && !only_in_2.length) {
+    msg += `Both teams are identical! 😳\n`;
+  } else {
+    if (only_in_1.length) {
+      msg += `\n👤 *Only ${team1.display_name} has:*\n`;
+      for (const p of only_in_1) {
+        const pts = p.points > 0 ? ` — ${p.points}pts` : "";
+        msg += `${roleEmoji(p.role)} ${p.name} (${p.ipl_team})${pts}\n`;
+      }
+    }
+    if (only_in_2.length) {
+      msg += `\n👤 *Only ${team2.display_name} has:*\n`;
+      for (const p of only_in_2) {
+        const pts = p.points > 0 ? ` — ${p.points}pts` : "";
+        msg += `${roleEmoji(p.role)} ${p.name} (${p.ipl_team})${pts}\n`;
+      }
+    }
+  }
+
+  // ── Captain / VC ──
+  msg += `\n${sep}\n👑 *CAPTAIN / VC*\n${sep}\n`;
+
+  const c1 = team1.captain?.name ?? "—";
+  const v1 = team1.vc?.name ?? "—";
+  const c2 = team2.captain?.name ?? "—";
+  const v2 = team2.vc?.name ?? "—";
+
+  const capSame = team1.captain?.id === team2.captain?.id;
+  const vcSame  = team1.vc?.id === team2.vc?.id;
+
+  msg += `👑 C: *${c1}*${capSame ? " ✅" : ""} vs *${c2}*${capSame ? " ✅" : ""}\n`;
+  msg += `⭐ VC: *${v1}*${vcSame ? " ✅" : ""} vs *${v2}*${vcSame ? " ✅" : ""}\n`;
+
+  if (!capSame && !vcSame) {
+    msg += `_(C & VC both different — big points swing possible!)_\n`;
+  } else if (!capSame) {
+    msg += `_(C different — VC same)_\n`;
+  } else if (!vcSame) {
+    msg += `_(C same — VC different)_\n`;
+  } else {
+    msg += `_(Same C & VC — result depends on team selection)_\n`;
+  }
+
+  // ── Common players ──
+  msg += `\n${sep}\n✅ *COMMON (${common.length}/11)*\n${sep}\n`;
+  if (common.length) {
+    const chunks: string[] = [];
+    for (const p of common) {
+      chunks.push(`${roleEmoji(p.role)} ${p.name}`);
+    }
+    // Group into lines of 2 to keep it compact
+    for (let i = 0; i < chunks.length; i += 2) {
+      msg += chunks.slice(i, i + 2).join("  ") + "\n";
+    }
+  } else {
+    msg += `No common players! Maximum variance.\n`;
+  }
+
+  msg += `\n_${only_in_1.length + only_in_2.length} different · ${common.length} shared_`;
+  return msg;
+}
+
 // ─── Command handlers ─────────────────────────────────────────────────────────
 
 async function handleJoin(msg: BotMessage): Promise<string> {
   const appUrl = `${FANTASY_BASE}/matches`;
-  // Find the latest announced match for this group
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) {
     return `Ipo active contest illai da! Next match announce aagum pothu soluven 🏏`;
@@ -378,16 +514,22 @@ async function handleJoin(msg: BotMessage): Promise<string> {
 }
 
 async function handleLeaderboard(msg: BotMessage): Promise<string> {
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) return "Active contest illai da! Match announce aagum pothu solluven.";
+
+  // Trigger live score sync before showing results — ensures fresh data
+  // Fire-and-wait with 6s cap so the leaderboard response isn't blocked indefinitely
+  if (state.match_id) {
+    try {
+      await Promise.race([
+        botFetch("/sync", { method: "POST", body: JSON.stringify({ match_id: state.match_id }) }),
+        new Promise((res) => setTimeout(res, 6000)),
+      ]);
+    } catch {
+      // Sync failed — fall through with cached leaderboard
+    }
+  }
 
   const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=10`);
   if (lb?.error) return "Leaderboard fetch panna mudiyala. Try again!";
@@ -401,14 +543,7 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
 }
 
 async function handleStats(msg: BotMessage, args: string): Promise<string> {
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) return "Active match illai da!";
 
@@ -427,14 +562,7 @@ async function handleStats(msg: BotMessage, args: string): Promise<string> {
 }
 
 async function handlePlayingXI(msg: BotMessage): Promise<string> {
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) return "Active match illai da!";
 
@@ -449,20 +577,35 @@ async function handlePlayingXI(msg: BotMessage): Promise<string> {
   return buildTossAnnouncement(xiData.match, xi);
 }
 
+async function handleDiff(msg: BotMessage, args: string): Promise<string> {
+  const state = await getActiveState(msg.groupId);
+
+  if (!state) return "Active contest illai da! Match announce aagum pothu solluven.";
+
+  // Parse optional names: "diff Krish Madhan" or "diff" (top 2)
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  const user1 = parts[0] ?? "";
+  const user2 = parts[1] ?? "";
+
+  const qs = new URLSearchParams({ match_id: state.match_id });
+  if (user1) qs.set("user1", user1);
+  if (user2) qs.set("user2", user2);
+
+  const data = await botFetch(`/team-diff?${qs.toString()}`);
+
+  if (data?.error) {
+    return `Team diff error: ${data.error}`;
+  }
+
+  return formatDiff(data);
+}
+
 // Admin commands
 
 async function handleLock(msg: BotMessage): Promise<string> {
   void msg; // everyone can run admin commands
 
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .is("completed_at", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) return "Lock panna active match illai!";
 
@@ -486,15 +629,22 @@ async function handleLock(msg: BotMessage): Promise<string> {
 async function handleGoLive(msg: BotMessage): Promise<string> {
   void msg; // everyone can run admin commands
 
-  const { data: state } = await supabase
+  // Must be locked (locked_at not null) — can't use getActiveState here
+  const { data: states } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", msg.groupId)
     .not("locked_at", "is", null)
-    .is("completed_at", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .is("completed_at", null);
+
+  if (!states?.length) return "Go live panna locked match illai!";
+
+  const now = Date.now();
+  const started = states.filter((s) => new Date(s.scheduled_at).getTime() <= now);
+  const future  = states.filter((s) => new Date(s.scheduled_at).getTime() > now);
+  const state = started.length
+    ? started.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())[0]!
+    : future.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0]!;
 
   if (!state) return "Go live panna locked match illai!";
 
@@ -538,15 +688,7 @@ async function handleAnnounce(msg: BotMessage): Promise<string> {
 async function handleSyncXI(msg: BotMessage): Promise<string> {
   void msg; // everyone can run admin commands
 
-  const { data: state } = await supabase
-    .from("ba_fantasy_state")
-    .select("*")
-    .eq("group_id", msg.groupId)
-    .not("announced_at", "is", null)
-    .is("completed_at", null)
-    .order("scheduled_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const state = await getActiveState(msg.groupId);
 
   if (!state) return "Active match illai!";
 
@@ -563,7 +705,9 @@ function buildHelp(): string {
   return (
     `🏏 *Fantasy Cricket Commands*\n\n` +
     `!fantasy join — Join group contest\n` +
-    `!fantasy lb — Leaderboard\n` +
+    `!fantasy lb — Leaderboard (syncs live scores first)\n` +
+    `!fantasy diff — Compare top 2 teams side-by-side\n` +
+    `!fantasy diff Krish Madhan — Compare two specific teams\n` +
     `!fantasy stats — Top scorer points\n` +
     `!fantasy score <player> — Specific player stats\n` +
     `!fantasy xi — Playing XI (post-toss)\n\n` +
@@ -602,6 +746,11 @@ export async function handleFantasyCommand(
 
     case "score":
       return { response: await handleStats(msg, rest) };
+
+    case "diff":
+    case "compare":
+    case "vs":
+      return { response: await handleDiff(msg, rest) };
 
     case "xi":
     case "playing11":

@@ -583,28 +583,22 @@ Type !quiz for next question.
 
 ## Bug #31 — 2026-03-29 20:26:08 IST
 **Reporter:** Krishna Madhan (`919487506127@c.us`)
-**Status:** `OPEN`
+**Status:** `FIXED`
 **Description:** no ipl knowledge, match updates not auto dropping
 
 **Recent chat context:**
 ```
   [Krishna Madhan]: Aama machi innaiku yaarukum yaarukum match
   [Bot]: Ah thala, innaiku match irukka-nu kekra? 😅
-
-Dei, March 29th-u Saturday dhaan - IPL season full swing la irukkanumla, but exact match details enakku therila da!
-
-Nee yen kekka vendiyathu - "TanglishBo
   [Krishna Madhan]: !cricket
   [Bot]: 🏏 *LIVE CRICKET SCORES*
-
 🏏 *Konark Suryas Odisha vs Royal Riders Punjab, Final, Legends League Cricket 2026*
-📋 Royal Riders Punjab won by 41 runs
-Royal Riders Punjab Inning 1: 188/6 (20 ov)
-Konark 
   [Krishna Madhan]: !bug no ipl knowledge, match updates not auto dropping
 ```
 
-**Fix notes:** _(developer fills this in)_
+**Fix notes:** Two fixes:
+1. **`!cricket` showing wrong tournament** — `getLiveScores()` and `checkCricketUpdates()` now prioritize IPL matches (by name + team abbreviation detection). Falls back to all matches only when no IPL game is live.
+2. **Match auto-drop missed window** — `checkAndAnnounceMatches` window expanded from "3h before match start" to "6h before", and the hard `msUntil < 0` block relaxed to 4h after start. `/api/bot/upcoming` now also returns matches that started within the last 4h (covers bot restarts mid-match). Deploy: push ipl-fantasy, restart bot.
 
 ---
 
@@ -771,6 +765,48 @@ Jos Buttler (WK)
 **Fix notes:** Two root causes in `checkAndSendToss` (`fantasy.ts`):
 1. **False early trigger** — `hasToss` was `toss_winner || playing_xi.home.length > 0`. IPL API returns probable XI *before* the actual toss, so `home.length > 0` fired 2+ hours early with no real toss. Fixed: `hasToss = !!toss_winner` only — message only sends when toss winner is confirmed.
 2. **Spam on DB write failure** — `saveState` silently swallowed upsert errors (no error check on return value), so `toss_notified_at` was never persisted. Every 5-min cron re-found the same row with null and re-sent the message. Fixed: `saveState` now throws if Supabase returns an error, which aborts the send and lets the next cron retry properly. Deploy: restart bot.
+
+---
+
+
+
+## Bug #37 — 2026-04-11
+**Reporter:** Harikrishnan D (session audit)
+**Status:** `FIXED`
+**Description:** Bot-created contest charging ₹1000 entry fee but awarding ₹0 to winners — money disappears
+
+**Root cause:** `POST /api/bot/contest` was inserting `entry_fee: 1000` but `prize_pool: 0`. The join route deducted ₹1000 per user (`if (contest.entry_fee > 0)`). The payout route computed `calcPrizeTiers(0, ...)` → `perPlayerAmount: 0` for all ranks → nobody paid out. The announcement also incorrectly said "Entry: FREE" while the app charged 1000.
+
+**Fix:**
+1. `api/bot/contest/route.ts`: Changed `entry_fee: 1000` → `entry_fee: 0` — bot group contest is free (bragging rights only)
+2. `api/admin/matches/[id]/complete/route.ts`: Added safety guard — if `prize_pool = 0` but `entry_fee_paid > 0`, auto-refund all users instead of distributing nothing
+3. `api/admin/bot-contest-refund/route.ts`: NEW one-time endpoint — retroactively refunds past affected users. Call `POST /api/admin/bot-contest-refund` once after deploy.
+
+Deploy: push ipl-fantasy → call POST /api/admin/bot-contest-refund once to fix past contests.## Bug #38 — 2026-04-11 15:56:34 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** 2 games are happening today fl returns leaderbaord for game that hasn’t started
+
+**Recent chat context:**
+```
+  [Harikrishnan D]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Chennai Super Kings vs Delhi Capitals_
+
+🥇 *harikrishnan977* — 0 pts
+   _Team 1_
+🥈 *Krishna Madhan* — 0 pts
+   _Team 1_
+
+_Join panna ippo time irukku!_
+  [Harikrishnan D]: Srh vs pk ku varatha
+  [Krishna Madhan]: Latest match yedukudhu
+  [Krishna Madhan]: !bug 2 games are happening today fl returns leaderbaord for game that hasn’t started
+```
+
+**Root cause:** All handler functions (`handleJoin`, `handleLeaderboard`, `handleStats`, `handlePlayingXI`, `handleDiff`, `handleLock`, `handleSyncXI`) used `ORDER BY scheduled_at DESC LIMIT 1` which always picks the **latest-scheduled** match — on a double-header day this is the future match, not the live one.
+
+**Fix:** Added `getActiveState(groupId)` helper in `fantasy.ts` — fetches all non-completed announced states, partitions into started vs future, returns most-recently-started (live) first, soonest-upcoming as fallback. All handlers now use this instead of the DESC sort query. `handleGoLive` uses same partition logic inline (needs `locked_at NOT NULL` filter not in `getActiveState`).
 
 ---
 
