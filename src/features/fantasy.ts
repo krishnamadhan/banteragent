@@ -304,7 +304,22 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     const hasToss = !!xiData.match.toss_winner;
     if (!hasToss) continue;
 
-    await saveState(state.match_id, { toss_notified_at: new Date().toISOString() });
+    // Auto-transition match to live so scoring cron picks it up.
+    // Step 1: lock (open → locked, idempotent if already locked)
+    await botFetch("/lock", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id }),
+    });
+    // Step 2: go live (locked → live)
+    await botFetch("/lock", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
+    });
+
+    await saveState(state.match_id, {
+      toss_notified_at: new Date().toISOString(),
+      locked_at: new Date().toISOString(),
+    });
     return buildTossAnnouncement(xiData.match, xiData.playing_xi);
   }
 
@@ -518,13 +533,13 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
 
   if (!state) return "Active contest illai da! Match announce aagum pothu solluven.";
 
-  // Trigger live score sync before showing results — ensures fresh data
-  // Fire-and-wait with 6s cap so the leaderboard response isn't blocked indefinitely
+  // Trigger live score sync before showing results — ensures fresh data.
+  // 12s cap: Cricbuzz fetch + upsert + leaderboard update can take 6-8s.
   if (state.match_id) {
     try {
       await Promise.race([
         botFetch("/sync", { method: "POST", body: JSON.stringify({ match_id: state.match_id }) }),
-        new Promise((res) => setTimeout(res, 6000)),
+        new Promise((res) => setTimeout(res, 12000)),
       ]);
     } catch {
       // Sync failed — fall through with cached leaderboard

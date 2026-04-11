@@ -810,3 +810,47 @@ _Join panna ippo time irukku!_
 
 ---
 
+## Bug #39 — 2026-04-11 16:44:48 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** score doesn’t refresh
+
+**Recent chat context:**
+```
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Punjab Kings vs Sunrisers Hyderabad_
+
+🥇 *harikrishnan977* — 172 pts
+   _Team 1_
+🥈 *Krishna Madhan* — 170 pts
+   _Team 1_
+🥉 *madhumithakanna* — 120 pts
+   _Team 1_
+
+_Match 
+  [Krishna Madhan]: !lb
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Punjab Kings vs Sunrisers Hyderabad_
+
+🥇 *harikrishnan977* — 172 pts
+   _Team 1_
+🥈 *Krishna Madhan* — 170 pts
+   _Team 1_  
+🥉 *madhumithakanna* — 120 pts
+   _Team 1_
+
+Thala
+  [Krishna Madhan]: !fb
+  [Krishna Madhan]: !bug score doesn’t refresh
+```
+
+**Root cause:** Two issues:
+1. `checkAndSendToss` detected the toss and saved `toss_notified_at` but never transitioned the match to `live` status in the DB. The `sync-live` cron only processes matches with `status = ‘live’`, so scoring never started — scores stayed at last-synced values.
+2. `handleLeaderboard` sync had a 6s `Promise.race` timeout, but the full Cricbuzz fetch + parse + upsert + leaderboard update pipeline takes 6-8s, so the timeout fired first and stale cached data was returned.
+
+**Fix:**
+1. `checkAndSendToss` now auto-locks + auto-goes-live the match immediately after toss detected (before sending toss announcement). Also saves `locked_at` alongside `toss_notified_at`.
+2. `handleLeaderboard` sync timeout increased from 6s → 12s.
+
+---
+
