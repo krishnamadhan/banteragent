@@ -608,8 +608,11 @@ async function handleDiff(msg: BotMessage, args: string): Promise<string> {
 
   const data = await botFetch(`/team-diff?${qs.toString()}`);
 
-  if (data?.error) {
-    return `Team diff error: ${data.error}`;
+  if (!data || data?.error) {
+    const msg = typeof data?.error === "string" && !data.error.includes("<!DOCTYPE")
+      ? data.error
+      : "Diff fetch pannala, try again!";
+    return msg;
   }
 
   return formatDiff(data);

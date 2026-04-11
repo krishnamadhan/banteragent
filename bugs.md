@@ -854,3 +854,31 @@ Thala
 
 ---
 
+## Bug #40 — 2026-04-11 17:19:47 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** html returned for diff
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !fantasy help
+  [Bot]: 🏏 *Fantasy Cricket Commands*
+
+!fantasy join — Join group contest
+!fantasy lb — Leaderboard (syncs live scores first)
+!fantasy diff — Compare top 2 teams side-by-side
+!fantasy diff Krish Madhan — Comp
+  [Krishna Madhan]: !fantasy diff krish hari
+  [Bot]: Team diff error: <!DOCTYPE html><html lang="en" class="rajdhani_92eb9b2b-module__AHegJq__variable"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, maxi
+  [Krishna Madhan]: !bug html returned for diff
+```
+
+**Root cause:** `diff/page.tsx` used `divideColor` as an inline style property (e.g., `style={{ divideColor: "#252D3D" }}`). `divideColor` is a Tailwind utility, not a CSS property — this caused 5 TypeScript compilation errors. The Vercel build failed, so the old deployment (without `team-diff/route.ts`) was still live. The bot hit a 404 which Next.js renders as an HTML page.
+
+**Fix:**
+1. `diff/page.tsx`: Removed all 5 invalid `divideColor` inline style properties
+2. `dashboard/page.tsx`: Cast complex Supabase query to `any` to fix "type instantiation excessively deep" error
+3. `handleDiff` in `fantasy.ts`: HTML responses (from 404/500) now show a friendly error instead of dumping raw HTML to WhatsApp
+
+---
+
