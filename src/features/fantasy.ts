@@ -719,6 +719,84 @@ async function handleSyncXI(msg: BotMessage): Promise<string> {
   return "Playing XI synced from Cricbuzz! Use !fantasy xi to see.";
 }
 
+async function handleContest(msg: BotMessage): Promise<string> {
+  // Fetch all upcoming open/scheduled matches in the next 48h
+  const data = await botFetch("/upcoming");
+  if (!data?.matches?.length) return "No open matches found in the next 48h.";
+
+  const openMatches = (data.matches as any[]).filter(
+    (m) => m.status === "open" || m.status === "scheduled"
+  );
+  if (!openMatches.length) return "No open/scheduled matches right now. Try again closer to match time.";
+
+  const lines: string[] = [];
+  let created = 0;
+
+  for (const match of openMatches) {
+    // Skip if already announced for this group
+    const state = await getState(match.id);
+    if (state?.announced_at) {
+      const code = state.invite_code;
+      lines.push(
+        `✅ *${match.team_home} vs ${match.team_away}* — contest already exists!\n` +
+        `🎯 Code: *${code ?? "—"}*\n` +
+        `📱 ${FANTASY_BASE}/contests/join?code=${code}`
+      );
+      continue;
+    }
+
+    const contestData = await botFetch("/contest", {
+      method: "POST",
+      body: JSON.stringify({ match_id: match.id, group_name: "Squad Goals" }),
+    });
+
+    const contest = contestData?.contest;
+    if (!contest?.id) {
+      lines.push(`❌ *${match.team_home} vs ${match.team_away}* — contest creation failed: ${contestData?.error ?? "unknown"}`);
+      continue;
+    }
+
+    await saveState(match.id, {
+      group_id: msg.groupId,
+      contest_id: contest.id,
+      invite_code: contest.invite_code ?? null,
+      team_home: match.team_home,
+      team_away: match.team_away,
+      scheduled_at: match.scheduled_at,
+      announced_at: new Date().toISOString(),
+    });
+
+    lines.push(buildMatchAnnouncement(match, contest));
+    created++;
+  }
+
+  if (!lines.length) return "Nothing to create.";
+
+  // If multiple matches, join with separator
+  return lines.join("\n\n─────────────────\n\n");
+}
+
+async function handleSyncSchedule(msg: BotMessage): Promise<string> {
+  void msg;
+
+  const res = await botFetch("/sync-schedule", { method: "POST" });
+  if (res?.error) return `Schedule sync failed: ${res.error}`;
+  if (!res?.ok) return "Schedule sync returned unexpected response.";
+
+  const { matchesSynced, totalFound, matches } = res as any;
+
+  if (matchesSynced === 0) return `Schedule synced — no new IPL matches found yet. (${totalFound} total in API)`;
+
+  let msg2 = `📅 *Schedule synced!* ${matchesSynced} matches updated.\n\n`;
+  for (const m of (matches as any[]).slice(0, 5)) {
+    const kickoff = formatIST(m.scheduled_at);
+    msg2 += `• *${m.team_home} vs ${m.team_away}* — ${kickoff} [${m.status.toUpperCase()}]\n`;
+  }
+  if (matchesSynced > 5) msg2 += `...and ${matchesSynced - 5} more.\n`;
+  msg2 += `\nUse *!fantasy announce* to create group contests.`;
+  return msg2;
+}
+
 function buildHelp(): string {
   return (
     `🏏 *Fantasy Cricket Commands*\n\n` +
@@ -730,7 +808,9 @@ function buildHelp(): string {
     `!fantasy score <player> — Specific player stats\n` +
     `!fantasy xi — Playing XI (post-toss)\n\n` +
     `_Admin:_\n` +
-    `!fantasy announce — Force match announcement\n` +
+    `!fantasy contest — Create contests for all open matches\n` +
+    `!fantasy schedule — Sync match schedule from Cricbuzz\n` +
+    `!fantasy announce — Force announcement for next match\n` +
     `!fantasy lock — Lock teams (match start)\n` +
     `!fantasy live — Go live (start scoring)\n` +
     `!fantasy sync — Sync playing XI\n\n` +
@@ -780,6 +860,14 @@ export async function handleFantasyCommand(
 
     case "live":
       return { response: await handleGoLive(msg) };
+
+    case "contest":
+    case "create":
+      return { response: await handleContest(msg) };
+
+    case "schedule":
+    case "sync-schedule":
+      return { response: await handleSyncSchedule(msg) };
 
     case "announce":
       return { response: await handleAnnounce(msg) };
