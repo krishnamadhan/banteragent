@@ -882,3 +882,54 @@ Thala
 
 ---
 
+## Bug #41 — 2026-04-13 19:37:03 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Status:** `OPEN`
+**Description:** emoji clues in quiz for movie name are irrelevant
+
+**Recent chat context:**
+```
+  [Madhu]: !a mullum malarum
+  [Bot]: ❌ Wrong da! Hint: Karthi meets a man who claims to be his long-lost childhood friend — emotional thriller
+  [Madhu]: !a meiyazhagan
+  [Bot]: ✅ Correct da Madhu! 🎉
+
+Movie: *meiyazhagan*
+💡 _🌸🤝 → Karthi meets a man who claims to be his long-lost childhood friend — emotional thriller_
++10 points!
+
+Type !quiz for next question.
+  [Madhu]: !bug emoji clues in quiz for movie name are irrelevant
+```
+
+**Fix notes:** _(developer fills this in)_
+
+---
+
+## Bug #42 — 2026-04-13 19:37:42 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Status:** `OPEN`
+**Description:** after reporting a bug next command is not executed
+
+**Recent chat context:**
+```
+  [Bot]: ✅ Correct da Madhu! 🎉
+
+Movie: *meiyazhagan*
+💡 _🌸🤝 → Karthi meets a man who claims to be his long-lost childhood friend — emotional thriller_
++10 points!
+
+Type !quiz for next question.
+  [Madhu]: !bug emoji clues in quiz for movie name are irrelevant
+  [Bot]: 🐛 Bug #41 noted! Thanks Madhu 🙏
+_"emoji clues in quiz for movie name are irrelevant"_
+
+Will be fixed in the next update.
+  [Madhu]: !quiz
+  [Madhu]: !bug after reporting a bug next command is not executed
+```
+
+**Fix notes:** _(developer fills this in)_
+
+---
+
