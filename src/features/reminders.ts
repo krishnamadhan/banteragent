@@ -172,7 +172,12 @@ export async function checkDueReminders(): Promise<
   }> = [];
 
   for (const reminder of dueReminders) {
-    const message = `⏰ *REMINDER!*\n\n📝 ${reminder.reminder_text}\n👤 Set by: ${reminder.sender_name}`;
+    // System notifications (from ipl-fantasy etc.) use sender_phone='__system__'
+    // and store the ready-to-send message directly in reminder_text — no wrapper.
+    const isSystem = reminder.sender_phone === "__system__";
+    const message = isSystem
+      ? reminder.reminder_text
+      : `⏰ *REMINDER!*\n\n📝 ${reminder.reminder_text}\n👤 Set by: ${reminder.sender_name}`;
 
     notifications.push({
       phone: reminder.is_group_reminder ? reminder.group_id : reminder.sender_phone,
