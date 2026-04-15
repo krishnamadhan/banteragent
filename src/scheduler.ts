@@ -266,6 +266,30 @@ export function startScheduler() {
     await sendMessage(groupId, `🏆 *WEEKLY AWARDS CEREMONY*\n🎤 Host: TanglishBot\n\n${awards}`);
   }, { timezone: TZ });
 
+  // ===== FANTASY JOIN NOTIFICATIONS — Every minute =====
+  cron.schedule("* * * * *", async () => {
+    try {
+      const { data: pending } = await supabase
+        .from("ba_notifications")
+        .select("id, message")
+        .eq("group_id", groupId)
+        .is("sent_at", null)
+        .order("created_at", { ascending: true })
+        .limit(10);
+
+      if (pending?.length) {
+        for (const notif of pending) {
+          await sendMessage(groupId, notif.message);
+          // Mark sent
+          await supabase
+            .from("ba_notifications")
+            .update({ sent_at: new Date().toISOString() })
+            .eq("id", notif.id);
+        }
+      }
+    } catch { /* table may not exist yet — ignore */ }
+  }, { timezone: TZ });
+
   // ===== CHECK REMINDERS — Every minute =====
   cron.schedule("* * * * *", async () => {
     const notifications = await checkDueReminders();
