@@ -115,25 +115,57 @@ function formatIST(isoDate: string): string {
   });
 }
 
-export function buildMatchAnnouncement(match: any, contest: any): string {
+const ROLE_LABEL: Record<string, string> = { AR: "AR", WK: "WK 🧤", BAT: "BAT", BOWL: "BOWL" };
+
+export async function buildMatchAnnouncement(match: any, contest: any): Promise<string> {
   const kickoff = formatIST(match.scheduled_at);
   const until = timeUntil(match.scheduled_at);
-  const appUrl = `${FANTASY_BASE}/matches/${match.id}`;
   const joinUrl = contest?.invite_code
     ? `${FANTASY_BASE}/contests/join?code=${contest.invite_code}`
-    : appUrl;
+    : `${FANTASY_BASE}/matches/${match.id}`;
 
-  return (
+  let msg =
     `🏏 *IPL Fantasy Alert!*\n\n` +
     `*${match.team_home} vs ${match.team_away}*\n` +
-    `📅 ${kickoff} (${until} from now)\n\n` +
-    `Dei macha! Namma group-ku oru private contest ready aayiruchu! 🔥\n\n` +
+    `📅 ${kickoff} (${until} from now)\n`;
+
+  if (match.venue) msg += `📍 ${match.venue}\n`;
+
+  msg +=
+    `\nDei macha! Namma group-ku oru private contest ready aayiruchu! 🔥\n\n` +
     `💰 Entry: FREE\n` +
     `🎯 Invite Code: *${contest?.invite_code ?? "—"}*\n\n` +
-    `📱 Join here:\n${joinUrl}\n\n` +
+    `📱 Join here:\n${joinUrl}\n\n`;
+
+  // Fetch live preview from API
+  try {
+    const preview = await botFetch(`/team-preview?match_id=${match.id}`);
+    if (preview && !preview.error) {
+      msg += `━━━━━━━━━━━━━━━━━━\n`;
+      msg += `🏟️ *GROUND PREDICTION*\n${preview.venue_tip}\n\n`;
+
+      if (preview.home_picks?.length || preview.away_picks?.length) {
+        msg += `⭐ *PLAYERS TO WATCH*\n`;
+        if (preview.home_picks?.length) {
+          const picks = preview.home_picks.map((p: any) => `${p.name} (${ROLE_LABEL[p.role] ?? p.role})`).join(", ");
+          msg += `🔵 ${match.team_home.split(" ").pop()}: ${picks}\n`;
+        }
+        if (preview.away_picks?.length) {
+          const picks = preview.away_picks.map((p: any) => `${p.name} (${ROLE_LABEL[p.role] ?? p.role})`).join(", ");
+          msg += `🟡 ${match.team_away.split(" ").pop()}: ${picks}\n`;
+        }
+        msg += `\n`;
+      }
+    }
+  } catch {
+    // Non-fatal — announcement still goes out without preview
+  }
+
+  msg +=
     `*Ippave team set pannu — toss nadanthathum playing 11 release aagum!*\n` +
-    `_(Deadline: match start time)_`
-  );
+    `_(Deadline: match start time)_`;
+
+  return msg;
 }
 
 export function buildTossAnnouncement(match: any, xi: any): string {
@@ -265,7 +297,7 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
       announced_at: new Date().toISOString(),
     });
 
-    return buildMatchAnnouncement(match, contest);
+    return await buildMatchAnnouncement(match, contest);
   }
 
   return null;
@@ -306,15 +338,23 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
 
     // Auto-transition match to live so scoring cron picks it up.
     // Step 1: lock (open → locked, idempotent if already locked)
-    await botFetch("/lock", {
+    const lockRes = await botFetch("/lock", {
       method: "POST",
       body: JSON.stringify({ match_id: state.match_id }),
     });
+    if (lockRes?.error) {
+      console.error(`[fantasy] lock failed for match ${state.match_id}:`, lockRes.error);
+      continue;
+    }
     // Step 2: go live (locked → live)
-    await botFetch("/lock", {
+    const goLiveRes = await botFetch("/lock", {
       method: "POST",
       body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
     });
+    if (goLiveRes?.error) {
+      console.error(`[fantasy] go_live failed for match ${state.match_id}:`, goLiveRes.error);
+      continue;
+    }
 
     await saveState(state.match_id, {
       toss_notified_at: new Date().toISOString(),
@@ -417,6 +457,237 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
   }
 
   return msg || null;
+}
+
+// ─── Seamless scheduled pipeline ─────────────────────────────────────────────
+
+type SendFn = (jid: string, text: string) => Promise<void>;
+
+/**
+ * 10:00 AM — Sync IPL schedule from Cricbuzz and post today's matches.
+ */
+export async function dailyScheduleSync(groupId: string): Promise<string | null> {
+  if (!BOT_SECRET) return null;
+
+  await botFetch("/sync-schedule", { method: "POST" });
+
+  const data = await botFetch("/upcoming");
+  if (!data?.matches?.length) return null;
+
+  const todayIST = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+  const todayMatches = (data.matches as any[]).filter((m) => {
+    const matchDateIST = new Date(m.scheduled_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    return matchDateIST === todayIST;
+  });
+
+  if (!todayMatches.length) return null;
+
+  let msg = `🏏 *TODAY'S IPL FANTASY MATCHES*\n\n`;
+  for (const m of todayMatches) {
+    msg += `*${m.team_home} vs ${m.team_away}*\n`;
+    msg += `🕐 ${formatIST(m.scheduled_at)}\n\n`;
+  }
+  msg += `Join at ${FANTASY_BASE} 🔗\n`;
+  msg += `_Contest + invite code coming at 11 AM!_`;
+  return msg;
+}
+
+/**
+ * 11:00 AM — Create contests for today's matches and post announcements.
+ */
+export async function dailyContestCreate(groupId: string): Promise<string | null> {
+  if (!BOT_SECRET) return null;
+
+  const data = await botFetch("/upcoming");
+  if (!data?.matches?.length) return null;
+
+  const todayIST = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+  const todayMatches = (data.matches as any[]).filter((m) => {
+    const matchDateIST = new Date(m.scheduled_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    return matchDateIST === todayIST && ["scheduled", "open"].includes(m.status);
+  });
+
+  if (!todayMatches.length) return null;
+
+  const announcements: string[] = [];
+
+  for (const match of todayMatches) {
+    const state = await getState(match.id);
+    if (state?.announced_at) continue;
+
+    const contestRes = await botFetch("/contest", {
+      method: "POST",
+      body: JSON.stringify({ match_id: match.id, group_name: "Banter FC" }),
+    });
+
+    if (!contestRes?.contest?.id) {
+      console.error(`[fantasy] Contest creation failed for ${match.id}:`, contestRes?.error);
+      continue;
+    }
+
+    await saveState(match.id, {
+      group_id: groupId,
+      contest_id: contestRes.contest.id,
+      invite_code: contestRes.contest.invite_code ?? null,
+      team_home: match.team_home,
+      team_away: match.team_away,
+      scheduled_at: match.scheduled_at,
+      announced_at: new Date().toISOString(),
+    });
+
+    announcements.push(await buildMatchAnnouncement(match, contestRes.contest));
+  }
+
+  return announcements.length ? announcements.join("\n\n─────────────\n\n") : null;
+}
+
+/**
+ * Lock teams and return a toss announcement message.
+ */
+async function lockAndAnnounce(matchId: string, xiData: any): Promise<string> {
+  const lockRes = await botFetch("/lock", {
+    method: "POST",
+    body: JSON.stringify({ match_id: matchId }),
+  });
+  if (lockRes?.error) {
+    console.error(`[fantasy] lock failed for ${matchId}:`, lockRes.error);
+  } else {
+    const goLiveRes = await botFetch("/lock", {
+      method: "POST",
+      body: JSON.stringify({ match_id: matchId, action: "go_live" }),
+    });
+    if (goLiveRes?.error) {
+      console.error(`[fantasy] go_live failed for ${matchId}:`, goLiveRes.error);
+    }
+  }
+  await saveState(matchId, {
+    toss_notified_at: new Date().toISOString(),
+    locked_at: new Date().toISOString(),
+  });
+  return buildTossAnnouncement(xiData.match, xiData.playing_xi);
+}
+
+/**
+ * 3:10 PM / 7:10 PM — Sync playing XI, check toss, lock teams.
+ * If toss not done yet, polls every 15 min via setTimeout until toss confirmed
+ * or the deadline (90 min past scheduled start) is reached.
+ *
+ * @param slotHourIST  Target match hour in IST (15 for 3:30 PM, 19 for 7:30 PM)
+ * @param slotMinIST   Target match minute in IST (30)
+ * @param sendFn       sendMessage callback — used for async poll results
+ */
+export async function preMatchCheck(
+  groupId: string,
+  slotHourIST: number,
+  slotMinIST: number,
+  sendFn: SendFn
+): Promise<string | null> {
+  if (!BOT_SECRET) return null;
+
+  // Find an announced, not-yet-tossed match in this time slot
+  const { data: states } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .not("announced_at", "is", null)
+    .is("toss_notified_at", null)
+    .is("completed_at", null);
+
+  if (!states?.length) return null;
+
+  const targetMins = slotHourIST * 60 + slotMinIST;
+  const slotMatch = (states as any[]).find((s) => {
+    if (!s.scheduled_at) return false;
+    const d = new Date(s.scheduled_at);
+    const h = parseInt(d.toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: false }));
+    const mi = d.toLocaleString("en-US", { timeZone: "Asia/Kolkata", minute: "numeric" });
+    return Math.abs(h * 60 + parseInt(mi) - targetMins) <= 35;
+  });
+
+  if (!slotMatch) return null;
+
+  // Always sync XI from Cricbuzz first
+  await botFetch("/playing-xi", {
+    method: "POST",
+    body: JSON.stringify({ match_id: slotMatch.match_id }),
+  });
+
+  const xiData = await botFetch(`/playing-xi?match_id=${slotMatch.match_id}`);
+
+  if (xiData?.match?.toss_winner) {
+    // Toss already done — lock and announce immediately
+    return await lockAndAnnounce(slotMatch.match_id, xiData);
+  }
+
+  // Toss not done — send reminder and start 15-min polling
+  const reminderMsg =
+    `⏰ *MATCH ALERT!*\n\n` +
+    `*${slotMatch.team_home} vs ${slotMatch.team_away}*\n` +
+    `🕐 ${formatIST(slotMatch.scheduled_at)}\n\n` +
+    `Join now before toss: ${FANTASY_BASE}/contests/join?code=${slotMatch.invite_code}\n\n` +
+    `_Waiting for toss result... 🪙 Will post playing XI as soon as it's done!_`;
+
+  const deadlineMs = new Date(slotMatch.scheduled_at).getTime() + 90 * 60 * 1000;
+  let pollsLeft = 6; // max 6 × 15 min = 90 min
+
+  const poll = async () => {
+    pollsLeft--;
+
+    if (Date.now() >= deadlineMs || pollsLeft < 0) {
+      await sendFn(
+        groupId,
+        `⚠️ *${slotMatch.team_home} vs ${slotMatch.team_away}*\n\nNo toss update after 90 minutes. Match may be delayed or abandoned.`
+      );
+      return;
+    }
+
+    await botFetch("/playing-xi", {
+      method: "POST",
+      body: JSON.stringify({ match_id: slotMatch.match_id }),
+    });
+
+    const fresh = await botFetch(`/playing-xi?match_id=${slotMatch.match_id}`);
+    if (fresh?.match?.toss_winner) {
+      const msg = await lockAndAnnounce(slotMatch.match_id, fresh);
+      await sendFn(groupId, msg);
+    } else if (pollsLeft > 0) {
+      setTimeout(poll, 15 * 60 * 1000);
+    } else {
+      await sendFn(
+        groupId,
+        `⚠️ *${slotMatch.team_home} vs ${slotMatch.team_away}*\n\nNo toss update after 90 minutes. Match may be delayed or abandoned.`
+      );
+    }
+  };
+
+  setTimeout(poll, 15 * 60 * 1000);
+  return reminderMsg;
+}
+
+/**
+ * Every 5 min — Sync live scores for all active matches.
+ * Silent — no WhatsApp message. Just keeps the fantasy app data fresh.
+ */
+export async function syncLiveScores(groupId: string): Promise<void> {
+  if (!BOT_SECRET) return;
+
+  const now = new Date().toISOString();
+  const { data: states } = await supabase
+    .from("ba_fantasy_state")
+    .select("match_id")
+    .eq("group_id", groupId)
+    .or("locked_at.not.is.null,toss_notified_at.not.is.null")
+    .lte("scheduled_at", now)
+    .is("completed_at", null);
+
+  if (!states?.length) return;
+
+  for (const state of states) {
+    await botFetch("/sync", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id }),
+    }).catch((e: any) => console.error(`[fantasy] sync error for ${state.match_id}:`, e));
+  }
 }
 
 // ─── Team diff formatter ─────────────────────────────────────────────────────
@@ -700,7 +971,7 @@ async function handleAnnounce(msg: BotMessage): Promise<string> {
     announced_at: new Date().toISOString(),
   });
 
-  return buildMatchAnnouncement(match, contest);
+  return await buildMatchAnnouncement(match, contest);
 }
 
 async function handleSyncXI(msg: BotMessage): Promise<string> {
@@ -766,7 +1037,7 @@ async function handleContest(msg: BotMessage): Promise<string> {
       announced_at: new Date().toISOString(),
     });
 
-    lines.push(buildMatchAnnouncement(match, contest));
+    lines.push(await buildMatchAnnouncement(match, contest));
     created++;
   }
 

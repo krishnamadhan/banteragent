@@ -100,6 +100,12 @@ ${sharedRules()}`;
 // BASE_SYSTEM_PROMPT for non-chat uses — function so date is fresh on each call
 function getBaseSystemPrompt(): string { return buildModePrompt("roast"); }
 
+// Wrap a system prompt string as a cacheable content block.
+// Reduces input token costs by ~90% when the same prompt is reused within 5 minutes.
+function cached(text: string): Array<{ type: "text"; text: string; cache_control: { type: "ephemeral" } }> {
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
 const STRUCTURED_PROMPT = `You generate content for a Tamil WhatsApp group bot. Follow the requested format EXACTLY. Do not add extra commentary or deviate from the format. When the format says Tanglish, write Tamil in English alphabets.`;
 
 // In-memory conversation history per group
@@ -194,7 +200,7 @@ export async function getChatResponse(
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 300,
-      system: systemPrompt,
+      system: cached(systemPrompt),
       messages: history,
     });
 
@@ -233,7 +239,7 @@ export async function generateStructured(prompt: string): Promise<string> {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 500,
-      system: STRUCTURED_PROMPT,
+      system: cached(STRUCTURED_PROMPT),
       messages: [{ role: "user", content: prompt }],
     });
     const text = response.content[0].type === "text"
@@ -254,7 +260,7 @@ export async function generateContent(prompt: string): Promise<string> {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 500,
-      system: getBaseSystemPrompt(),
+      system: cached(getBaseSystemPrompt()),
       messages: [{ role: "user", content: prompt }],
     });
     const text = response.content[0].type === "text"
@@ -300,7 +306,7 @@ Less is more — only jump in when it adds value or comedy.`;
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 200,
-      system: buildModePrompt(mode),
+      system: cached(buildModePrompt(mode)),
       messages: [{ role: "user", content: prompt }],
     });
 

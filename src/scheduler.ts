@@ -7,7 +7,13 @@ import { checkDueReminders } from "./features/reminders.js";
 import { checkCricketUpdates } from "./features/cricket.js";
 import { scheduledNewsDrop } from "./features/news.js";
 import { handleGameCommand } from "./features/games.js";
-import { checkAndAnnounceMatches, checkAndSendToss, sendLiveUpdate } from "./features/fantasy.js";
+import {
+  dailyScheduleSync,
+  dailyContestCreate,
+  preMatchCheck,
+  syncLiveScores,
+  sendLiveUpdate,
+} from "./features/fantasy.js";
 import { supabase } from "./supabase.js";
 import type { BotMessage } from "./types.js";
 
@@ -55,6 +61,8 @@ export function startScheduler() {
     const MONTH_NAMES = ["January","February","March","April","May","June",
       "July","August","September","October","November","December"];
 
+    const wishedPhones: string[] = [];
+
     for (const p of profiles) {
       if (!p.birthday || p.member_phone.startsWith("unknown_")) continue;
 
@@ -76,12 +84,16 @@ export function startScheduler() {
       if (!wish) continue;
 
       await sendMentionMessage(groupId, `🎂 *BIRTHDAY ALERT!*\n\n${wish}`, [p.member_phone]);
+      wishedPhones.push(p.member_phone);
+    }
 
-      // Mark as wished this year
+    // Batch-update last_wished_at in one query (same value for all)
+    if (wishedPhones.length > 0) {
       const { supabase: sb } = await import("./supabase.js");
-      await sb.from("ba_member_profiles").update({
-        last_wished_at: new Date().toISOString().split("T")[0],
-      }).eq("group_id", groupId).eq("member_phone", p.member_phone);
+      await sb.from("ba_member_profiles")
+        .update({ last_wished_at: new Date().toISOString().split("T")[0] })
+        .eq("group_id", groupId)
+        .in("member_phone", wishedPhones);
     }
   }, { timezone: TZ });
 
@@ -133,18 +145,45 @@ export function startScheduler() {
       return;
     }
 
+    // Build a name→nickname map so we can resolve partner_name aliases
+    const nameToDisplay = new Map<string, string>();
+    const allProfiles = profiles.filter((p) => !p.member_phone.startsWith("unknown_"));
+    for (const p of allProfiles) {
+      const display = p.nickname ?? p.member_name;
+      nameToDisplay.set(p.member_name.toLowerCase(), display);
+      if (p.nickname) nameToDisplay.set(p.nickname.toLowerCase(), display);
+    }
+
     const memberList = withZodiac
       .map((p) => {
-        const parts = [`${p.member_name} (${p.zodiac_sign})`];
+        // Use nickname as primary display name so Claude uses it naturally
+        const displayName = p.nickname ?? p.member_name;
+        const parts = [`${displayName} (${p.zodiac_sign})`];
         if (p.occupation) parts.push(p.occupation);
-        if (p.partner_name) parts.push(`married to ${p.partner_name}`);
+        if (p.partner_name) {
+          // Resolve partner name to their display name (handles nickname aliases like Thoonga=Madhan)
+          const resolvedPartner = nameToDisplay.get(p.partner_name.toLowerCase()) ?? p.partner_name;
+          parts.push(`married to ${resolvedPartner}`);
+        }
         return parts.join(", ");
       })
       .join("\n");
 
+    // Build a couples clarification so Claude never confuses nicknames with separate people
+    const couplesInGroup = withZodiac
+      .filter((p) => p.partner_name)
+      .map((p) => {
+        const me = p.nickname ?? p.member_name;
+        const partner = nameToDisplay.get(p.partner_name!.toLowerCase()) ?? p.partner_name!;
+        return `${me} ↔ ${partner}`;
+      });
+    const couplesNote = couplesInGroup.length
+      ? `\nCOUPLES IN THIS GROUP (all partners are group members — DO NOT treat partner names as outside people):\n${[...new Set(couplesInGroup)].join(", ")}\n`
+      : "";
+
     const todayStr = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
     const msg = await generateStructured(
-      `Today is ${todayStr}. Write a FAKE funny personalized daily horoscope in Tanglish for these specific people:\n${memberList}\n\nRules:\n- Start with "🗓️ ${todayStr}" on the first line\n- Use each person's name directly (not sign name)\n- 2-3 lines per person, roast-style prediction\n- Reference their job/partner if listed — e.g. "office la aaj boss-u unna paakamatten"\n- End with one funny "Group Prediction" line\n- Comedy horoscope, NOT real astrology\n- NO disclaimers, no "Note:", pure Tanglish`
+      `Today is ${todayStr}. Write a FAKE funny personalized daily horoscope in Tanglish for these specific people:\n${memberList}\n${couplesNote}\nRules:\n- Start with "🗓️ ${todayStr}" on the first line\n- Use each person's display name (first entry before the sign) — that is how they are known in the group\n- 2-3 lines per person, roast-style prediction\n- Reference their job/partner if listed — e.g. "office la aaj boss-u unna paakamatten"\n- When roasting a couple, reference BOTH people by name — do not just say "your spouse"\n- End with one funny "Group Prediction" line\n- Comedy horoscope, NOT real astrology\n- NO disclaimers, no "Note:", pure Tanglish`
     );
 
     // Build mention-aware text: replace "Name" with "@phone" for WA mentions
@@ -320,40 +359,122 @@ Use these REAL stats as the foundation. Add Vijay TV award ceremony comedy on to
     console.log(`🎮 Auto-game drop #${autoGameDropCount}: ${game}`);
   }, { timezone: TZ });
 
-  // ===== IPL FANTASY — PRE-MATCH ANNOUNCEMENT (every 5 min, 3h before) =====
-  cron.schedule("*/5 * * * *", async () => {
+  // ===== WEEKLY GAME SCORE RESET — Monday 12:00 AM IST =====
+  cron.schedule("0 0 * * 1", async () => {
+    // Calculate last week's start (Monday 7 days ago)
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const prevWeekStart = new Date(Date.now() + istOffset - 7 * 24 * 60 * 60 * 1000);
+    const prevWeekKey = prevWeekStart.toISOString().split("T")[0]!.slice(0, 10);
+    // Align to Monday
+    const dayOfWeek = prevWeekStart.getUTCDay();
+    const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const mondayDate = new Date(prevWeekStart);
+    mondayDate.setUTCDate(prevWeekStart.getUTCDate() - daysFromMonday);
+    const weekKey = mondayDate.toISOString().split("T")[0]!;
+
+    // Fetch last week's scores
+    const { data } = await supabase
+      .from("ba_game_scores")
+      .select("player_name, points")
+      .eq("group_id", groupId)
+      .eq("week_start", weekKey)
+      .order("points", { ascending: false });
+
+    if (data?.length) {
+      const totals = new Map<string, number>();
+      for (const row of data) {
+        totals.set(row.player_name, (totals.get(row.player_name) ?? 0) + row.points);
+      }
+      const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+      const medals = ["🥇", "🥈", "🥉"];
+      let board = `🏁 *LAST WEEK FINAL SCORES*\n\n`;
+      sorted.forEach(([name, pts], i) => {
+        const medal = medals[i] ?? `${i + 1}.`;
+        board += `${medal} ${name} — ${pts} pts\n`;
+      });
+      const winner = sorted[0]?.[0] ?? "yaarumey";
+      board += `\nCongrats ${winner}! 🎉 New week starts now — !quiz pannu!`;
+      await sendMessage(groupId, board);
+    }
+
+    // Prune old weekly records (keep only last 4 weeks to avoid unlimited growth)
+    const cutoff = new Date(Date.now() + istOffset - 28 * 24 * 60 * 60 * 1000);
+    const cutoffKey = cutoff.toISOString().split("T")[0]!;
+    await supabase
+      .from("ba_game_scores")
+      .delete()
+      .eq("group_id", groupId)
+      .lt("week_start", cutoffKey);
+  }, { timezone: TZ });
+
+  // ─── IPL FANTASY PIPELINE ────────────────────────────────────────────────
+
+  // 10:00 AM — Sync schedule from Cricbuzz + post today's matches
+  cron.schedule("0 10 * * *", async () => {
     if (!process.env.FANTASY_BOT_SECRET) return;
     try {
-      const msg = await checkAndAnnounceMatches(groupId);
+      const msg = await dailyScheduleSync(groupId);
       if (msg) {
         await sendMessage(groupId, msg);
         addBotMessageToHistory(groupId, msg);
         addRecentMessage(`[Bot]: ${msg}`);
-        console.log("🏏 Fantasy match announced");
+        console.log("🏏 Fantasy schedule posted");
       }
-    } catch (e) {
-      console.error("Fantasy announce error:", e);
-    }
+    } catch (e) { console.error("Fantasy schedule sync error:", e); }
   }, { timezone: TZ });
 
-  // ===== IPL FANTASY — TOSS + PLAYING XI (every 5 min, near match time) =====
-  cron.schedule("*/5 * * * *", async () => {
+  // 11:00 AM — Create contests for today's matches + post announcements
+  cron.schedule("0 11 * * *", async () => {
     if (!process.env.FANTASY_BOT_SECRET) return;
     try {
-      const msg = await checkAndSendToss(groupId);
+      const msg = await dailyContestCreate(groupId);
       if (msg) {
         await sendMessage(groupId, msg);
         addBotMessageToHistory(groupId, msg);
         addRecentMessage(`[Bot]: ${msg}`);
-        console.log("🏏 Fantasy toss/XI sent");
+        console.log("🏏 Fantasy contests created");
       }
-    } catch (e) {
-      console.error("Fantasy toss error:", e);
-    }
+    } catch (e) { console.error("Fantasy contest create error:", e); }
   }, { timezone: TZ });
 
-  // ===== IPL FANTASY — LIVE LEADERBOARD UPDATE (every 30 min during match) =====
-  cron.schedule("*/30 * * * *", async () => {
+  // 3:10 PM — Pre-match check for 3:30 PM slot (toss sync + poll every 15 min)
+  cron.schedule("10 15 * * *", async () => {
+    if (!process.env.FANTASY_BOT_SECRET) return;
+    try {
+      const msg = await preMatchCheck(groupId, 15, 30, sendMessage);
+      if (msg) {
+        await sendMessage(groupId, msg);
+        addBotMessageToHistory(groupId, msg);
+        addRecentMessage(`[Bot]: ${msg}`);
+        console.log("🏏 Fantasy pre-match (3:30 PM slot) triggered");
+      }
+    } catch (e) { console.error("Fantasy pre-match (3:30 PM) error:", e); }
+  }, { timezone: TZ });
+
+  // 7:10 PM — Pre-match check for 7:30 PM slot (toss sync + poll every 15 min)
+  cron.schedule("10 19 * * *", async () => {
+    if (!process.env.FANTASY_BOT_SECRET) return;
+    try {
+      const msg = await preMatchCheck(groupId, 19, 30, sendMessage);
+      if (msg) {
+        await sendMessage(groupId, msg);
+        addBotMessageToHistory(groupId, msg);
+        addRecentMessage(`[Bot]: ${msg}`);
+        console.log("🏏 Fantasy pre-match (7:30 PM slot) triggered");
+      }
+    } catch (e) { console.error("Fantasy pre-match (7:30 PM) error:", e); }
+  }, { timezone: TZ });
+
+  // Every 5 min — Sync live scores silently (no WhatsApp message)
+  cron.schedule("*/5 * * * *", async () => {
+    if (!process.env.FANTASY_BOT_SECRET) return;
+    try {
+      await syncLiveScores(groupId);
+    } catch (e) { console.error("Fantasy score sync error:", e); }
+  }, { timezone: TZ });
+
+  // Every hour at :30 — Post leaderboard update during live match
+  cron.schedule("30 * * * *", async () => {
     if (!process.env.FANTASY_BOT_SECRET) return;
     try {
       const msg = await sendLiveUpdate(groupId);
@@ -361,10 +482,8 @@ Use these REAL stats as the foundation. Add Vijay TV award ceremony comedy on to
         await sendMessage(groupId, msg);
         addBotMessageToHistory(groupId, msg);
         addRecentMessage(`[Bot]: ${msg}`);
-        console.log("🏏 Fantasy live update sent");
+        console.log("🏏 Fantasy hourly leaderboard sent");
       }
-    } catch (e) {
-      console.error("Fantasy live update error:", e);
-    }
+    } catch (e) { console.error("Fantasy leaderboard error:", e); }
   }, { timezone: TZ });
 }
