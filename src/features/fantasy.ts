@@ -584,14 +584,23 @@ export async function preMatchCheck(
 ): Promise<string | null> {
   if (!BOT_SECRET) return null;
 
-  // Find an announced, not-yet-tossed match in this time slot
+  // Find an announced, not-yet-tossed match in this time slot.
+  // Constrain scheduled_at to ±3h of now so stale matches from previous days
+  // (where toss_notified_at / completed_at were never set) can't sneak through.
+  // The subsequent HH:MM check narrows it to the exact cron slot.
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - 3 * 60 * 60 * 1000).toISOString();
+  const windowEnd   = new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString();
+
   const { data: states } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
     .not("announced_at", "is", null)
     .is("toss_notified_at", null)
-    .is("completed_at", null);
+    .is("completed_at", null)
+    .gte("scheduled_at", windowStart)
+    .lte("scheduled_at", windowEnd);
 
   if (!states?.length) return null;
 
@@ -821,10 +830,21 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
   if (lb?.error) return "Leaderboard fetch panna mudiyala. Try again!";
   if (!lb?.leaderboard?.length) return "Innum yaarum join pannala da 😅 Join pannu: !fantasy join";
 
+  const contestStatus = lb.contest_status ?? "open";
+
+  // If match is live but all scores are 0, the sync hasn't populated yet.
+  // Show a helpful message instead of a misleading all-zero leaderboard.
+  if (contestStatus === "live") {
+    const allZero = (lb.leaderboard as any[]).every((e: any) => (e.points ?? 0) === 0);
+    if (allZero) {
+      return `🏆 *FANTASY LEADERBOARD*\n_${state.team_home} vs ${state.team_away}_\n\n⏳ Scores still syncing da — 2 nimisham wait panni !fl again try pannu! Cricket points API update aaguthu 🏏`;
+    }
+  }
+
   return buildLeaderboard(
     lb.leaderboard,
     `${state.team_home} vs ${state.team_away}`,
-    lb.contest_status ?? "open"
+    contestStatus
   );
 }
 
