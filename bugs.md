@@ -884,7 +884,7 @@ Thala
 
 ## Bug #41 — 2026-04-13 19:37:03 IST
 **Reporter:** Madhu (`919159750218@c.us`)
-**Status:** `OPEN`
+**Status:** `FIXED`
 **Description:** emoji clues in quiz for movie name are irrelevant
 
 **Recent chat context:**
@@ -902,13 +902,13 @@ Type !quiz for next question.
   [Madhu]: !bug emoji clues in quiz for movie name are irrelevant
 ```
 
-**Fix notes:** _(developer fills this in)_
+**Fix notes:** Root cause — `meiyazhagan` had emojis 🌸🤝 (flower + handshake) which don't map to the title words at all. "Meiyazhagan" = "Mei" (real/true) + "Azhagan" (beautiful person). Fixed to 💯👤 (true/100% + person) — both emojis represent the actual title words. Deploy: restart bot.
 
 ---
 
 ## Bug #42 — 2026-04-13 19:37:42 IST
 **Reporter:** Madhu (`919159750218@c.us`)
-**Status:** `OPEN`
+**Status:** `FIXED`
 **Description:** after reporting a bug next command is not executed
 
 **Recent chat context:**
@@ -929,7 +929,258 @@ Will be fixed in the next update.
   [Madhu]: !bug after reporting a bug next command is not executed
 ```
 
-**Fix notes:** _(developer fills this in)_
+**Fix notes:** Root cause — the 8-second per-user command rate limiter applied to `!bug`. When Madhu typed `!quiz` immediately after `!bug`, the cooldown timer (set by `!bug`) blocked `!quiz` silently. Fixed by exempting `!bug` from rate limiting in listener.ts alongside `!answer` — bug reports are instant file writes with no abuse risk, and users naturally want to continue playing right after reporting. Deploy: restart bot.
 
 ---
+
+## Bug #43 — 2026-04-16 15:17:14 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** mis information
+
+**Recent chat context:**
+```
+  [Madhu]: Thappu thappu
+  [Madhu]: Punjab vs mumbai inaiku
+  [Bot]: Dei maddy! 😂
+
+Enna thappu nu sollara... thala phone number tag panni sorry solli confusion create pannuna thappu dhaana?
+
+Illa naan over ah roast pannena thappu? Both ways um thala dhaan loose da!
+
+W
+  [Bot]: Dei Madhu! Sharp ah catch pannita da! 😂
+
+Punjab vs Mumbai dhaan today - naan SRH nu type pannitu confusion create panniten. Copy-paste mokka!
+
+Mumbai ku Wankhede home ground advantage iruku, but Punj
+  [Krishna Madhan]: !bug mis information
+```
+
+**Fix notes:** Root cause — Claude was hallucinating IPL fixture/score data from stale training memory in free-chat responses (said "SRH" when the match was Punjab vs Mumbai). Added a CRICKET SCORES rule to `sharedRules()` in claude.ts: Claude must NEVER mention specific live scores, today's fixtures, or recent results from memory — they are stale and wrong. Instead it must redirect: "Dei, !cricket type panna live score solluven da 🏏". Deploy: restart bot.
+
+---
+
+## Bug #44 — 2026-04-16 15:25:39 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** stale match data
+
+**Recent chat context:**
+```
+  [Bot]: Dei maddy! 😂
+
+Enna thappu nu sollara... thala phone number tag panni sorry solli confusion create pannuna thappu dhaana?
+
+Illa naan over ah roast pannena thappu? Both ways um thala dhaan loose da!
+
+W
+  [Bot]: Dei Madhu! Sharp ah catch pannita da! 😂
+
+Punjab vs Mumbai dhaan today - naan SRH nu type pannitu confusion create panniten. Copy-paste mokka!
+
+Mumbai ku Wankhede home ground advantage iruku, but Punj
+  [Krishna Madhan]: !bug mis information
+  [Bot]: 🐛 Bug #43 noted! Thanks Krishna Madhan 🙏
+_"mis information"_
+
+Will be fixed in the next update.
+  [Krishna Madhan]: !bug stale match data
+```
+
+**Fix notes:** Same root cause and fix as Bug #43 — Claude hallucinating stale cricket data. Fixed by same CRICKET SCORES rule in sharedRules(). Deploy: restart bot.
+
+---
+
+## Bug #45 — 2026-04-16 19:15:19 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `OPEN`
+**Description:** wrong match contest
+
+**Recent chat context:**
+```
+  [Bot]: 🎬 *RANDOM MOVIE FACT*
+
+Thalapathy Vijay's "Thuppakki" la oru scene irukku where he jumps from helicopter right? Athu actually Vijay than jump pannaru da - no dupe! 🚁
+
+Director Murugadoss was like "Vijay sir please dupe use pannunga" but our Thalapathy said "Dei naan than jump pannuven" and literally jumped from 200 feet height with safety gear. 
+
+Insurance company almost heart attack vanthuruchi but film hit aachu! Mass level dedication da 🔥💥
+  [Bot]: ⏰ *MATCH ALERT!*
+
+*Rajasthan Royals vs Mumbai Indians*
+🕐 Tue, 7 Apr, 7:30 pm
+
+Join now before toss: https://ipl11.vercel.app/contests/join?code=3ODZZH
+
+_Waiting for toss result... 🪙 Will post playing XI as soon as it's done!_
+  [Madhu]: Meendum thappu
+  [Krishna Madhan]: !bug wrong match contest
+```
+
+**Fix notes:** Root cause — `preMatchCheck` queried `ba_fantasy_state` with no date filter on `scheduled_at`. The time-of-day filter (`Math.abs(h * 60 + min - targetMins) <= 35`) only compared HH:MM, so any stale match from a previous day at the same kick-off time (e.g. April 7 7:30 PM) would re-trigger on every subsequent day at 7:10 PM as long as `toss_notified_at` and `completed_at` were both NULL. Fixed by adding `gte("scheduled_at", now - 3h)` and `lte("scheduled_at", now + 3h)` to the DB query, so only matches actually scheduled near now are candidates. Also ran a one-off DB cleanup that marked 9 stale announced-but-never-completed matches (April 7–15) as `completed_at = now`. Deploy: restart bot.
+
+---
+
+## Bug #46 — 2026-04-18 14:59:25 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** spot filled is always 1
+
+**Recent chat context:**
+```
+  [Bot]: 🏏 *IPL Fantasy Alert!*
+
+*Royal Challengers Bengaluru vs Delhi Capitals*
+📅 Sat, 18 Apr, 3:30 pm (4h 29m from now)
+📍 M.Chinnaswamy Stadium
+
+Dei macha! Namma group-ku oru private contest ready aayiruchu! 🔥
+
+💰 Entry: FREE
+🎯 Invite Code: *E9F5R4*
+
+📱 Join here:
+https://ipl11.vercel.app/contests/join?code=E9F5R4
+
+━━━━━━━━━━━━━━━━━━
+🏟️ *GROUND PREDICTION*
+🔥 Batting paradise — 200+ expected. Pick ARs & power hitters. Avoid pure spinners.
+
+⭐ *PLAYERS TO WATCH*
+🔵 Bengaluru: Venkatesh Iyer (AR), Vihaan Malhotra (AR), Jitesh Sharma (WK 🧤), Jordan Cox (WK 🧤), Virat Kohli (BAT)
+🟡 Capitals: Ajay Jadav Mandal (AR), Madhav Tiwari (AR), KL Rahul (WK 🧤), Abishek Porel (WK 🧤), Ben Duckett (BAT)
+
+*Ippave team set pannu — toss nadanthathum playing 11 release aagum!*
+_(Deadline: match start time)_
+
+─────────────
+
+🏏 *IPL Fantasy Alert!*
+
+*Sunrisers Hyderabad vs Chennai Super Kings*
+📅 Sat, 18 Apr, 7:30 pm (8h 29m from now)
+📍 Rajiv Gandhi International Stadium
+
+Dei macha! Namma group-ku oru private contest ready aayiruchu! 🔥
+
+💰 Entry: FREE
+🎯 Invite Code: *8VTQLM*
+
+📱 Join here:
+https://ipl11.vercel.app/contests/join?code=8VTQLM
+
+━━━━━━━━━━━━━━━━━━
+🏟️ *GROUND PREDICTION*
+🏏 Flat track, dew in 2nd innings. ARs + top-order batters shine.
+
+⭐ *PLAYERS TO WATCH*
+🔵 Hyderabad: Abhishek Sharma (AR), Kamindu Mendis (AR), Salil Arora (WK 🧤), Ishan Kishan (WK 🧤), Travis Head (BAT)
+🟡 Kings: Shivam Dube (AR), Ramakrishna Ghosh (AR), Urvil Patel (WK 🧤), Sanju Samson (WK 🧤), Ayush Mhatre (BAT)
+
+*Ippave team set pannu — toss nadanthathum playing 11 release aagum!*
+_(Deadline: match start time)_
+  [Bot]: 📜 *THIS DAY IN TAMIL HISTORY*
+
+Dei, April 18, 1998 la our Thala Ajith's "Kadhal Mannan" release aachu da! 🎬 First time Ajith-Maanu Bhandari combination - enna love story, enna kuthu songs!
+
+Ippo paatha 90s romance cringe ah irukum, but appo theatre la whistle adicha naanga than da 😅 Ajith anna bike scenes paathtu evlo peru Royal Enfield vaanga aarambichangalo! Classic Kollywood magic machaan ✨
+  [Krishna Madhan]: !quiz
+  [Bot]: 🎬 *TAMIL MOVIE QUIZ*
+
+Guess the movie: 🌿🤱
+
+Type *!a <movie name>* to answer
+3 wrong attempts-ku appuram hint varum!
+  [Krishna Madhan]: !bug spot filled is always 1
+```
+
+**Fix notes:** Root cause — `contests/browse/[matchId]/page.tsx` fetched entry count via `entry_count:f11_entries(count)` using the user-session Supabase client. RLS on `f11_entries` only allows users to see their own entries when a match is `open`/`locked` (policy: `entries_read_own`). So the count always returned 1 (their single joined entry) instead of the real total across all users. Fixed by removing the inline count from the user client query, then separately counting all entries using `createServiceClient()` (service role bypasses RLS) and merging counts into the contests array. Deploy: push ipl-fantasy.
+
+---
+
+## Bug #47 — 2026-04-18 16:40:51 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** misinformation
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Royal Challengers Bengaluru vs Delhi Capitals_
+
+🥇 *harikrishnan977* — 0 pts
+   _Team 1_
+🥈 *Krishna Madhan* — 0 pts
+   _Team 1_
+🥉 *madhumithakanna* — 0 pts
+   _Team 1_
+4. *
+  [Krishna Madhan]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Royal Challengers Bengaluru vs Delhi Capitals_
+
+🥇 *harikrishnan977* — 249 pts
+   _Team 1_
+🥈 *preethigamuruga* — 174 pts
+   _Team 1_
+🥉 *Krishna Madhan* — 110 pts
+   _Team 1
+  [Krishna Madhan]: !bug misinformation
+```
+
+**Fix notes:** Root cause — when `!fl` is called the moment a match goes live, the Cricbuzz score sync hasn't populated fantasy points yet. The bot fell through with cached 0-pt leaderboard data and displayed it as truth. Fixed by detecting the all-zero case during a live contest and returning a "scores still syncing, try again in 2 minutes" message instead of a misleading all-zero board. Deploy: restart bot.
+
+---
+
+## Bug #48 — 2026-04-18 18:47:34 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** ipl11.vercel.app not loading, some ui inconsistency and login issues do a clean intergration test and fix bugss
+
+**Recent chat context:**
+```
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Royal Challengers Bengaluru vs Delhi Capitals_
+
+🥇 *harikrishnan977* — 437 pts
+   _Team 1_
+🥈 *preethigamuruga* — 325 pts
+   _Team 1_
+🥉 *madhumithakanna* — 221 pts
+   _Team 
+  [Bot]: 🎬 *RANDOM MOVIE FACT*
+
+Ey, did you know Rajini's iconic "Magizhchi" dialogue in Muthu was completely unscripted da? 🎬 
+
+Director Balu Mahendra told him to just react naturally when the heroine accepts his proposal - so our Thalaiva went "Magizhchi, magizhchi!" and did that trademark hand gesture spontaneously! 
+
+The whole crew burst out laughing, but Balu kept the take. Now half of TN uses that word for happiness, thanks to one improvised moment! 😄
+
+Mass ah illa mokka ah? 🔥
+  [Harikrishnan D]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Royal Challengers Bengaluru vs Delhi Capitals_
+
+🥇 *harikrishnan977* — 582 pts
+   _Team 1_
+🥈 *madhumithakanna* — 422 pts
+   _Team 1_
+🥉 *preethigamuruga* — 386 pts
+   _Team 
+  [Krishna Madhan]: !bug ipl11.vercel.app not loading, some ui inconsistency and login issues do a clean intergration test and fix bugss
+```
+
+**Fix notes:** Full integration audit of ipl11.vercel.app. Four root causes found:
+
+1. **Login/register pages broken** — Both had `export const dynamic = "force-dynamic"` inside `"use client"` components. This directive is silently ignored in client components, but caused Next.js to serve an inconsistent cached/dynamic hybrid that broke the post-login redirect in some cases. Removed the invalid export.
+
+2. **User data pages serving stale/wrong-user data** — Dashboard, contests, wallet, profile, and leaderboard pages all had `export const revalidate = 30` (or 60). Next.js caches server component output for that duration, sharing one user's data with all users who request the same page within the window. Changed all to `export const dynamic = "force-dynamic"` to ensure every request respects the authenticated session.
+
+3. **All game pages crashing with 500** — `AppHeader.tsx` (rendered by the shared `(game)/layout.tsx`) used `.single()` to fetch the user's profile. `.single()` throws a PostgREST error when no row is found (e.g. auth user exists but profile wasn't created by the DB trigger). Since AppHeader wraps every game page, a missing profile crashed the entire app. Fixed by switching to `.maybeSingle()` in AppHeader, dashboard, wallet, and profile pages.
+
+4. **Login/register pages rendered as `○ (Static)`** — After fixing #1, these pages now correctly pre-render as static HTML since they contain no server-side dynamic data.
+
+Deploy: push ipl-fantasy → Vercel auto-deploy.
 
