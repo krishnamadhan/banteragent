@@ -60,9 +60,99 @@ function randPick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
 }
 
+// ===== Wordle helpers =====
+function computeWordleResult(guess: string, target: string): Array<"correct" | "present" | "absent"> {
+  const result: Array<"correct" | "present" | "absent"> = new Array(target.length).fill("absent");
+  const usedTarget = new Array(target.length).fill(false);
+  const usedGuess  = new Array(guess.length).fill(false);
+  for (let i = 0; i < target.length; i++) {
+    if (guess[i] === target[i]) {
+      result[i] = "correct"; usedTarget[i] = true; usedGuess[i] = true;
+    }
+  }
+  for (let i = 0; i < guess.length; i++) {
+    if (usedGuess[i]) continue;
+    for (let j = 0; j < target.length; j++) {
+      if (!usedTarget[j] && guess[i] === target[j]) {
+        result[i] = "present"; usedTarget[j] = true; break;
+      }
+    }
+  }
+  return result;
+}
+
+function buildWordleBoard(guesses: Array<{ player: string; word: string; result: string[] }>): string {
+  return guesses.map(g => {
+    const emojis = g.result.map(r => r === "correct" ? "🟩" : r === "present" ? "🟨" : "⬛").join("");
+    return `*${g.player}* → ${g.word.toUpperCase()}\n${emojis}`;
+  }).join("\n\n");
+}
+
+// ===== SONG QUIZ — English translations of famous Tamil lyrics =====
+const SONG_QUIZ: { lines: string[]; answer: string; movie: string; hint: string }[] = [
+  { lines: ["Little little desires", "Little little dreams", "Eyes that never close", "Sleep never comes"], answer: "chinna chinna aasai", movie: "Roja", hint: "AR Rahman's debut masterpiece — tiny wishes, sleepless nights" },
+  { lines: ["Green color green color", "The color of life is green", "Your smile your smile", "Is the light of my life"], answer: "pachai nirame", movie: "Alaipayuthey", hint: "AR Rahman — 'pachai' = green, 'nirame' = color" },
+  { lines: ["Why this murderous rage girl", "Why this murderous rage", "White skin girl heart is black"], answer: "kolaveri di", movie: "3", hint: "Dhanush's viral internet hit — kolaveri literally means murderous rage!" },
+  { lines: ["Moonlight moonlight where did you hide", "My heart became a cuckoo bird", "I walked all paths searching for you"], answer: "vennilave vennilave", movie: "Minsara Kanavu", hint: "AR Rahman — 'vennilave' = white moonlight, dreamy love song" },
+  { lines: ["Don't push and go don't push and go", "Without you what will I do", "Don't erase me and go I will crumble"], answer: "thalli pogadhey", movie: "Achcham Yenbadhu Madamaiyada", hint: "'Thalli' = push — begging someone not to leave" },
+  { lines: ["Hey ginger hip lady", "My heart ran behind you", "One look one look finished me completely"], answer: "inji iduppazhagi", movie: "Anegan", hint: "Inji = ginger, iduppu = hip, azhagi = beauty — Harris Jayaraj banger" },
+  { lines: ["Life life you are my life", "Without you there is no me", "In every breath you are the one"], answer: "uyire", movie: "Bombay", hint: "AR Rahman — 'uyire' literally means 'life' in Tamil" },
+  { lines: ["Come before come before", "In my heart come before", "Your eyes are the answer to all my questions"], answer: "munbe vaa", movie: "Sillunu Oru Kadhal", hint: "AR Rahman — 'munbe vaa' = 'come before me'" },
+  { lines: ["Inside the heart inside the heart", "You entered without asking permission", "As a sweet dream you settled inside"], answer: "nenjukulle", movie: "Kadal", hint: "AR Rahman — 'nenjukulle' = 'inside the heart'" },
+  { lines: ["Darling of my eyes darling of my eyes", "Where did you come from", "You are the one who holds my breath"], answer: "kannaana kanney", movie: "Viswasam", hint: "D. Imman father-daughter love song — 'kannaana kanney' = darling of eyes" },
+  { lines: ["Heart rise up rise up", "Don't break don't break", "Pick up the scattered pieces and walk forward"], answer: "nenje ezhu", movie: "Maryan", hint: "AR Rahman — motivational anthem, 'nenje ezhu' = heart rise up" },
+  { lines: ["A different word didn't you say", "Didn't you say you'd never leave", "That day was a lie or is today a lie"], answer: "maruvaarthai", movie: "Enai Noki Paayum Thota", hint: "'Maruvaarthai' = different word / broken promise — Darbuka Siva" },
+  { lines: ["The flower that bloomed in the morning", "Will it be there by night", "Even if petals fall the fragrance remains"], answer: "nenjinile", movie: "Uyire", hint: "AR Rahman — 'nenjinile' = inside the heart, bittersweet love song" },
+  { lines: ["What will you say what will you say", "Opening your mouth what will you say", "About this heart that fell what words do you have"], answer: "enna solla pogiraai", movie: "Kandukondain Kandukondain", hint: "AR Rahman — longing song asking what the beloved will finally say" },
+  { lines: ["Rowdy baby rowdy baby", "Don't leave me rowdy baby", "Your style your smile drives me crazy"], answer: "rowdy baby", movie: "Maari 2", hint: "Yuvan Shankar Raja — massive viral hit with Dhanush and Sai Pallavi" },
+  { lines: ["Will you cross the sky and come", "Will you cross the earth and come", "For this love will you risk everything"], answer: "vinnaithaandi varuvaayaa", movie: "Vinnaithaandi Varuvaayaa", hint: "AR Rahman — 'will you cross the sky and come for me'" },
+  { lines: ["My golden moon my golden moon", "Where did you go tonight", "The stars searched for you and cried to sleep"], answer: "en iniya pon nilave", movie: "Moondram Pirai", hint: "Ilaiyaraaja — 'pon nilave' = golden moon, emotional Kamal classic" },
+  { lines: ["Love rose love rose", "It came into my heart", "Without permission it settled", "Now it will never leave"], answer: "kadhal rojave", movie: "Roja", hint: "AR Rahman — 'kadhal rojave' = love rose, iconic 90s duet" },
+  { lines: ["You are my evening you are my morning", "You are my day you are my night", "Without you this world has no meaning"], answer: "kadhal sadugudu", movie: "Alaipayuthey", hint: "AR Rahman — all-consuming love song from Alaipayuthey" },
+  { lines: ["One time come and see", "On the shore of my mind", "What blooms there for you come and see"], answer: "oru murai vanthu parthaya", movie: "Mudalvan", hint: "AR Rahman — 'oru murai vanthu parthaya' = come and see just once" },
+  { lines: ["Rain rain come", "Come to my heart", "Without asking me just pour down"], answer: "mazhai mazhai", movie: "Majaa", hint: "Yuvan Shankar Raja — 'mazhai' = rain, simple joyful love song" },
+  { lines: ["Thunder and lightning at the wrong time", "You came and settled in the wrong heart", "What I asked for is not what I got"], answer: "netru illatha matram", movie: "Kaadhal Kondein", hint: "Yuvan Shankar Raja — Selvaraghavan's raw tragic love story" },
+  { lines: ["You who came like the rains", "You who stayed like the earth", "How do I explain what you mean to me"], answer: "poongatru", movie: "Alaipayuthey", hint: "AR Rahman — gentle breeze love song, 'poongatru' = gentle breeze" },
+  { lines: ["Beautiful beautiful beautiful girl", "You are a festival for my eyes", "Walking on the road you look like a film"], answer: "azhagiya laila", movie: "Suryavamsam", hint: "Vidyasagar — classic complimenting love song, 'azhagiya' = beautiful" },
+  { lines: ["The girl next door entered my heart", "The boy next door is all confused now", "What is this feeling what is this feeling"], answer: "kaadhale kaadhale", movie: "Minnale", hint: "Harris Jayaraj — 'kaadhale' = love, sweet playful duet" },
+  { lines: ["I searched seven worlds for you", "I circled the sky looking for you", "Where are you hidden my beautiful"], answer: "ezhil manne", movie: "Uyire", hint: "AR Rahman — searching the universe for the beloved" },
+  { lines: ["Push off the fear push off the fear", "Open both eyes and see", "The future is in your hands not anyone else's"], answer: "surviva surviva", movie: "Rhythm", hint: "AR Rahman — motivational anthem from a family drama" },
+  { lines: ["Anjali Anjali Anjali", "Push flower Anjali", "You are my everything Anjali"], answer: "anjali anjali", movie: "Duet", hint: "AR Rahman — title song dedicated to the heroine Anjali" },
+  { lines: ["The deer that came from the forest", "Drank water from the river", "Saw its own reflection", "And fell in love"], answer: "vaaname ellai", movie: "Aranmanai", hint: "Ilaiyaraaja — poetic metaphor song, the sky is the limit" },
+  { lines: ["Without speaking a word", "Your eyes said everything", "In that silence between us", "A thousand songs were sung"], answer: "pesa ninaikkiren", movie: "Alaipayuthey", hint: "AR Rahman — 'pesa ninaikkiren' = I want to speak but can't, subtle love" },
+];
+
+// ===== WORDLE — Single-word Tamil movie titles (6 letters) =====
+const WORDLE_WORDS: { word: string; hint: string }[] = [
+  { word: "VIKRAM", hint: "Kamal Haasan's masked cop — Lokesh Kanagaraj blockbuster" },
+  { word: "MERSAL", hint: "Vijay in 3 roles — magician, doctor, historical crusader" },
+  { word: "SARKAR", hint: "Vijay returns to become Chief Minister — AR Murugadoss" },
+  { word: "MASTER", hint: "Vijay as an alcoholic professor in a juvenile home — Lokesh" },
+  { word: "VARISU", hint: "Vijay as an heir who must prove himself to his family" },
+  { word: "DARBAR", hint: "Rajini as a tough Mumbai police commissioner — Murugadoss" },
+  { word: "JAILER", hint: "Rajini as a retired jailer whose son turns criminal — Nelson" },
+  { word: "SINGAM", hint: "Suriya as a lion-hearted cop who never backs down" },
+  { word: "GHILLI", hint: "Vijay protects a girl from a powerful rowdy — Dharani's hit" },
+  { word: "ANJALI", hint: "Emotional film about a special child — Ilaiyaraaja's music" },
+  { word: "COMALI", hint: "Jayam Raman wakes from a 20-year coma into modern India" },
+  { word: "KARNAN", hint: "Dhanush as a fearless village protector — Pa. Ranjith" },
+  { word: "AMARAN", hint: "Sivakarthikeyan as Major Mukund Varadarajan — true story" },
+  { word: "KAITHI", hint: "Karthi as a just-released prisoner who becomes an unlikely hero — Lokesh" },
+  { word: "SKETCH", hint: "Vikram as a carefree man who falls for a gangster's girl" },
+];
+
+// ===== MEMORY — word pools across categories =====
+const MEMORY_POOLS: Record<string, string[]> = {
+  actors:  ["RAJINI", "VIJAY", "SURIYA", "AJITH", "DHANUSH", "VIKRAM", "KAMAL", "KARTHI", "VISHAL", "SIMBU"],
+  foods:   ["BIRYANI", "IDLI", "DOSAI", "VADAI", "SAMBAR", "RASAM", "HALWA", "PONGAL", "THAYIR", "PAROTTA"],
+  cities:  ["CHENNAI", "MADURAI", "KOVAI", "TRICHY", "SALEM", "VELLORE", "TIRUNELVELI", "ERODE", "DINDIGUL", "KARUR"],
+  movies:  ["ROJA", "BEAST", "MERSAL", "VIKRAM", "DARBAR", "SINGAM", "MASTER", "GHILLI", "PETTA", "THERI"],
+  words:   ["VANAKKAM", "NANDRI", "AMMA", "APPA", "THAMBI", "AKKA", "MACHAAN", "SERI", "ENNA", "AAMA"],
+};
+
 // ===== Persistent answer archive — file cache + Supabase backend =====
 // File = fast in-session cache. Supabase = ground truth across restarts/redeployments.
-type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue";
+type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle";
 type ArchiveMap = Record<string, Partial<Record<GameType, string[]>>>;
 
 const ARCHIVE_DIR = join(process.cwd(), "data");
@@ -159,7 +249,7 @@ const CURATED_QUIZZES: { emojis: string; answer: string; hint: string }[] = [
   { emojis: "👫🧲", answer: "maattrraan", hint: "Suriya as conjoined twins — inseparable, until a pharma villain tears their world apart" },
   { emojis: "🛡️💪", answer: "etharkkum thunindhavan", hint: "Suriya takes on a woman trafficking gang — 'brave for anything' mass action" },
   { emojis: "🍌🌿", answer: "vaazhai", hint: "A family of banana plantation workers — quiet, profound, and deeply human" },
-  { emojis: "🌸🤝", answer: "meiyazhagan", hint: "Karthi meets a man who claims to be his long-lost childhood friend — emotional thriller" },
+  { emojis: "💯👤", answer: "meiyazhagan", hint: "Karthi meets a man who claims to be his long-lost childhood friend — emotional thriller" },
   { emojis: "🔍☠️", answer: "naan mahaan alla", hint: "Karthi as a carefree guy who becomes a vigilante hunting a serial killer" },
   { emojis: "🚩🗳️", answer: "kodi", hint: "Dhanush in a dual role — a political activist and his scheming lookalike in elections" },
   { emojis: "🐂🏘️", answer: "komban", hint: "Karthi as a peaceful man pushed to fight back when his village and family are threatened" },
@@ -717,6 +807,167 @@ async function startTrivia(msg: BotMessage): Promise<string> {
   return `🧠 *TRIVIA TIME*\n\n${trivia.question}\n\nType *!a <answer>* to answer`;
 }
 
+// ===== SONG QUIZ — Guess the Tamil song from English-translated lyrics =====
+async function startSongQuiz(msg: BotMessage): Promise<string> {
+  let archived = getArchived(msg.groupId, "song");
+  let pool = SONG_QUIZ.filter(q => !archived.includes(q.answer.toLowerCase()));
+  if (pool.length === 0) {
+    resetArchive(msg.groupId, "song");
+    pool = SONG_QUIZ;
+  }
+  const song = randPick(pool);
+  archiveAnswer(msg.groupId, "song", song.answer);
+
+  await createGame(msg.groupId, "song", {
+    answer: song.answer,
+    movie: song.movie,
+    hint: song.hint,
+    attempts: 0,
+    hintGiven: false,
+  });
+
+  const lyricsDisplay = song.lines.map(l => `_${l}_`).join("\n");
+  return `🎵 *GUESS THE TAMIL SONG*\n\n_English translation of the lyrics:_\n\n${lyricsDisplay}\n\nType *!a <song name>* to guess!\nTypos ok da, Tanglish welcome! Hint varum after 3 wrong attempts.`;
+}
+
+// ===== WORDLE — Group shared Tamil movie 6-letter puzzle =====
+async function startWordle(msg: BotMessage): Promise<string> {
+  let archived = getArchived(msg.groupId, "wordle");
+  let pool = WORDLE_WORDS.filter(w => !archived.includes(w.word.toLowerCase()));
+  if (pool.length === 0) {
+    resetArchive(msg.groupId, "wordle");
+    pool = WORDLE_WORDS;
+  }
+  const entry = randPick(pool);
+  archiveAnswer(msg.groupId, "wordle", entry.word.toLowerCase());
+
+  await createGame(msg.groupId, "wordle", {
+    word: entry.word,
+    hint: entry.hint,
+    guesses: [],
+    solved: false,
+    maxGuesses: 6,
+  });
+
+  return `🟩 *WORDLE — KOLLYWOOD EDITION*\n\n*${entry.word.length}*-letter Tamil movie title!\nEveryone can guess — group shared board!\n\nType *!w <word>* to submit a guess.\n6 total guesses for the group.\n\n🟩 right letter, right spot\n🟨 right letter, wrong spot\n⬛ letter not in word\n\n💡 Hint: ${entry.hint}`;
+}
+
+async function handleWordleGuess(args: string, msg: BotMessage): Promise<string> {
+  const game = await getActiveGame(msg.groupId, "wordle");
+  if (!game) return "Wordle game illa da! Type *!wordle* to start a new game.";
+
+  const state = game.state;
+  if (state.solved) return "Already solved da! Type *!wordle* for a new game.";
+
+  const guess = args.trim().toUpperCase();
+  const target = (state.word as string).toUpperCase();
+
+  if (guess.length !== target.length) {
+    return `❌ ${target.length}-letter word vennum da! "${guess}" has ${guess.length} letters.`;
+  }
+  if (!/^[A-Z]+$/.test(guess)) {
+    return "English letters only da! No numbers or special characters.";
+  }
+
+  const result = computeWordleResult(guess, target);
+  const guesses = (state.guesses as Array<{ player: string; word: string; result: string[] }>);
+  guesses.push({ player: msg.senderName, word: guess, result });
+
+  const isSolved = result.every(r => r === "correct");
+  const isGameOver = isSolved || guesses.length >= (state.maxGuesses as number);
+
+  await supabase
+    .from("ba_game_state")
+    .update({ state: { ...state, guesses, solved: isSolved }, is_active: !isGameOver })
+    .eq("id", game.id);
+
+  const board = buildWordleBoard(guesses);
+
+  if (isSolved) {
+    await awardPoints(msg.groupId, msg.from, msg.senderName, "wordle", 20);
+    return `🟩 *WORDLE SOLVED!*\n\n*${msg.senderName}* cracked it in ${guesses.length} guess${guesses.length > 1 ? "es" : ""}! 🎉\n\n${board}\n\nWord: *${target}*\n+20 points! Type *!wordle* for a new game.`;
+  }
+
+  if (isGameOver) {
+    return `💀 *GAME OVER!* All ${state.maxGuesses} guesses used.\n\n${board}\n\nAnswer was: *${target}*\n💡 ${state.hint}\n\nType *!wordle* for a new game.`;
+  }
+
+  const remaining = (state.maxGuesses as number) - guesses.length;
+  return `${board}\n\n_${remaining} guess${remaining > 1 ? "es" : ""} remaining — Type *!w <word>*_`;
+}
+
+// ===== MEMORY — Memorize and recall a sequence of words =====
+async function startMemory(msg: BotMessage): Promise<string> {
+  const categories = Object.keys(MEMORY_POOLS);
+  const category = randPick(categories)!;
+  const pool = MEMORY_POOLS[category]!;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const words = shuffled.slice(0, 5);
+
+  await createGame(msg.groupId, "memory", {
+    category,
+    words,
+    attempts: 0,
+  });
+
+  const wordList = words.map((w, i) => `${i + 1}. *${w}*`).join("\n");
+  const showText = `🧠 *MEMORY GAME — ${category.toUpperCase()}*\n\nMemorize these 5 words:\n\n${wordList}\n\n_⏱️ 15 seconds... then this message disappears!_`;
+  const recallText = `💥 *Gone!* Now recall from memory:\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
+
+  // Send the words message directly so we can delete it after 15 seconds
+  try {
+    const { getClient } = await import("../index.js");
+    const client = getClient();
+    if (!client) throw new Error("client not ready");
+
+    const sentMsg = await client.sendMessage(msg.groupId, showText);
+    const msgId = sentMsg?.id?._serialized;
+
+    setTimeout(async () => {
+      // Attempt deletion — try direct method first, then puppeteer fallback
+      let deleted = false;
+      try {
+        await sentMsg.delete(true);
+        deleted = true;
+      } catch (e) {
+        console.error("[memory] delete(true) failed, trying puppeteer fallback:", e);
+      }
+
+      if (!deleted && msgId && client.pupPage) {
+        try {
+          await client.pupPage.evaluate(async ({ chatId, serialized }: { chatId: string; serialized: string }) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const g = globalThis as any;
+            const chat = g.Store.Chat.get(chatId);
+            const m    = g.Store.Msg.get(serialized);
+            if (chat && m) await g.Store.Cmd.sendRevokeMsgs(chat, [m]);
+          }, { chatId: msg.groupId, serialized: msgId });
+          deleted = true;
+        } catch (e2) {
+          console.error("[memory] puppeteer revoke failed:", e2);
+        }
+      }
+
+      // Always send recall prompt regardless of deletion success
+      try {
+        const recall = deleted
+          ? recallText
+          : `💥 *(Scroll up fast!)* Now recall from memory:\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
+        await client.sendMessage(msg.groupId, recall);
+      } catch (e) {
+        console.error("[memory] recall prompt failed:", e);
+      }
+    }, 15_000);
+
+    return ""; // already sent — listener will skip empty response
+  } catch (e) {
+    console.error("[memory] direct send failed, falling back:", e);
+  }
+
+  // Fallback: let listener send it (no deletion)
+  return `🧠 *MEMORY GAME*\n\nMemorize these 5 *${category.toUpperCase()}*:\n\n${wordList}\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
+}
+
 // ===== HANDLE ANSWER =====
 async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
   const game = await getActiveGame(msg.groupId);
@@ -1019,6 +1270,56 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
       await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
       return `❌ Wrong! Try again. (Attempt ${state.attempts}/5)`;
     }
+
+    case "song": {
+      if (fuzzyMatch(answer, state.answer)) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        await awardPoints(msg.groupId, msg.from, msg.senderName, "song", 15);
+        return `✅ *${msg.senderName}* got it! 🎵 +15 pts\n\nSong: *${state.answer}* (${state.movie})\n\n💡 ${state.hint}\n\nType !song for next one!`;
+      }
+
+      state.attempts = (state.attempts ?? 0) + 1;
+
+      if (state.attempts >= 3 && !state.hintGiven && state.hint) {
+        state.hintGiven = true;
+        await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
+        return `❌ Wrong da! Hint: ${state.hint}`;
+      }
+
+      if (state.attempts >= 6) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        return `⏰ Time up! Song was: *${state.answer}* (${state.movie})\nType !song for next one.`;
+      }
+
+      await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
+      return `❌ Wrong! Try again. (Attempt ${state.attempts}/6)`;
+    }
+
+    case "memory": {
+      const required = (state.words as string[]).map(w => w.toUpperCase());
+      const typed = rawAnswer.toUpperCase().split(/[\s,]+/).filter(Boolean);
+      const allCorrect = required.every(w => typed.includes(w));
+
+      if (allCorrect) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        await awardPoints(msg.groupId, msg.from, msg.senderName, "memory", 20);
+        return `🧠 *${msg.senderName} remembered all ${required.length}!* 🏆\n\nWords were: ${required.join(", ")}\n+20 points! Type !memory for next round.`;
+      }
+
+      const missed = required.filter(w => !typed.includes(w));
+      state.attempts = (state.attempts ?? 0) + 1;
+
+      if (state.attempts >= 5) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        return `⏰ Game over! Words were: ${required.join(", ")}\nType !memory for a new round.`;
+      }
+
+      await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
+      return `❌ Close! Missed: *${missed.join(", ")}* — Try again! (${state.attempts}/5)`;
+    }
+
+    case "wordle":
+      return `Wordle answer-ku *!w <word>* type pannu da!\nExample: *!w MERSAL*`;
 
     default:
       return "Unknown game type machaan.";
@@ -1766,6 +2067,18 @@ export async function handleGameCommand(
       break;
     case "dialogue":
       response = await startDialogue(msg);
+      break;
+    case "song":
+      response = await startSongQuiz(msg);
+      break;
+    case "wordle":
+      response = await startWordle(msg);
+      break;
+    case "wordle_guess":
+      response = await handleWordleGuess(args, msg);
+      break;
+    case "memory":
+      response = await startMemory(msg);
       break;
     case "songlyric":
       response = await startSongLyric(msg);

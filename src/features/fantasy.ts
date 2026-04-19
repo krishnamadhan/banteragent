@@ -82,7 +82,27 @@ async function getActiveState(groupId: string) {
   if (!states?.length) return null;
 
   const now = Date.now();
-  const started = states.filter((s) => new Date(s.scheduled_at).getTime() <= now);
+  // A T20 match is done within ~4h of start. Treat any started match older than 8h
+  // as stale (completed but not yet marked) so it doesn't block today's matches.
+  const STALE_MS = 8 * 60 * 60 * 1000;
+
+  // Auto-close stale matches (fire-and-forget — don't block the response)
+  const stale = states.filter((s) => {
+    const t = new Date(s.scheduled_at).getTime();
+    return t <= now && (now - t) >= STALE_MS;
+  });
+  if (stale.length) {
+    supabase
+      .from("ba_fantasy_state")
+      .update({ completed_at: new Date().toISOString() })
+      .in("match_id", stale.map((s) => s.match_id))
+      .then(({ error }) => { if (error) console.error("[fantasy] stale close failed:", error.message); });
+  }
+
+  const started = states.filter((s) => {
+    const t = new Date(s.scheduled_at).getTime();
+    return t <= now && (now - t) < STALE_MS;
+  });
   const future  = states.filter((s) => new Date(s.scheduled_at).getTime() >  now);
 
   if (started.length) {
@@ -310,14 +330,17 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
 export async function checkAndSendToss(groupId: string): Promise<string | null> {
   if (!BOT_SECRET) return null;
 
-  // Find matches that were announced but toss not yet notified
+  // Find matches that were announced but toss not yet notified.
+  // Do NOT filter on locked_at — a match can be manually locked before the toss
+  // (e.g. admin runs !fantasy lock early), in which case we still need to send the
+  // toss announcement once the toss result is available.
   const { data: states } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
     .not("announced_at", "is", null)
     .is("toss_notified_at", null)
-    .is("locked_at", null);
+    .is("completed_at", null);
 
   if (!states?.length) return null;
 
@@ -337,23 +360,23 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     if (!hasToss) continue;
 
     // Auto-transition match to live so scoring cron picks it up.
-    // Step 1: lock (open → locked, idempotent if already locked)
+    // Step 1: lock (open → locked). Ignore error if already locked/live.
     const lockRes = await botFetch("/lock", {
       method: "POST",
       body: JSON.stringify({ match_id: state.match_id }),
     });
     if (lockRes?.error) {
-      console.error(`[fantasy] lock failed for match ${state.match_id}:`, lockRes.error);
-      continue;
+      console.warn(`[fantasy] lock returned error for match ${state.match_id} (may already be locked/live):`, lockRes.error);
+      // Don't abort — match may already be locked, proceed to go_live and announce
     }
-    // Step 2: go live (locked → live)
+    // Step 2: go live (locked → live). Ignore error if already live.
     const goLiveRes = await botFetch("/lock", {
       method: "POST",
       body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
     });
     if (goLiveRes?.error) {
-      console.error(`[fantasy] go_live failed for match ${state.match_id}:`, goLiveRes.error);
-      continue;
+      console.warn(`[fantasy] go_live returned error for match ${state.match_id} (may already be live):`, goLiveRes.error);
+      // Don't abort — announce toss regardless of state transition errors
     }
 
     await saveState(state.match_id, {
@@ -674,6 +697,91 @@ export async function preMatchCheck(
 }
 
 /**
+ * 8:30 AM — Announce the previous day's match winners.
+ * Covers matches that completed overnight while users were asleep.
+ * Also catches matches where completed_at was never set (bot restarted, etc.).
+ */
+export async function morningWinnerAnnouncement(groupId: string): Promise<string | null> {
+  if (!BOT_SECRET) return null;
+
+  // Compute yesterday's IST date range in UTC
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(Date.now() + istOffset);
+  // Midnight yesterday IST = day before today at 00:00 IST
+  const yesterdayMidnightIST = new Date(
+    Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() - 1, 0, 0, 0)
+  );
+  const yesterdayStartUTC = new Date(yesterdayMidnightIST.getTime() - istOffset);
+  const yesterdayEndUTC   = new Date(yesterdayStartUTC.getTime() + 24 * 60 * 60 * 1000);
+
+  // Find matches that:
+  //   (a) completed yesterday (completed_at in yesterday's IST window), OR
+  //   (b) had a toss yesterday but were never marked completed (bot restart, etc.)
+  const { data: completedYesterday } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .gte("completed_at", yesterdayStartUTC.toISOString())
+    .lt("completed_at", yesterdayEndUTC.toISOString());
+
+  const { data: unfinalized } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .not("toss_notified_at", "is", null)
+    .is("completed_at", null)
+    .gte("scheduled_at", yesterdayStartUTC.toISOString())
+    .lt("scheduled_at", yesterdayEndUTC.toISOString());
+
+  const allStates = [
+    ...(completedYesterday ?? []),
+    ...(unfinalized ?? []),
+  ];
+  if (!allStates.length) return null;
+
+  const announcements: string[] = [];
+
+  for (const state of allStates) {
+    // Check current match status via the fantasy app
+    const summary = await botFetch(`/match-summary?match_id=${state.match_id}`);
+    const matchStatus = summary?.match?.status;
+
+    // Only announce if the match is actually done
+    if (!matchStatus || !["completed", "in_review"].includes(matchStatus)) continue;
+
+    // Mark completed in our state if not already done
+    if (!state.completed_at) {
+      await saveState(state.match_id, { completed_at: new Date().toISOString() });
+    }
+
+    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
+    if (!lb?.leaderboard?.length) continue;
+
+    const medals = ["🥇", "🥈", "🥉"];
+    const winner = lb.leaderboard[0];
+
+    let msg =
+      `🌅 *MORNING RECAP — ${state.team_home} vs ${state.team_away}*\n\n` +
+      `Nanna thoongireenga? Nethu match results solren! 😄\n\n` +
+      `🏆 *FINAL STANDINGS*\n`;
+
+    lb.leaderboard.forEach((e: any, i: number) => {
+      const medal = medals[i] ?? `${i + 1}.`;
+      msg += `${medal} *${e.display_name}* — ${e.points} pts\n`;
+      if (e.team_name) msg += `   _${e.team_name}_\n`;
+    });
+
+    if (winner) {
+      msg += `\nCongrats *${winner.display_name}*! 🎉 Well played everyone 🏏`;
+    }
+
+    announcements.push(msg);
+  }
+
+  return announcements.length ? announcements.join("\n\n─────────────\n\n") : null;
+}
+
+/**
  * Every 5 min — Sync live scores for all active matches.
  * Silent — no WhatsApp message. Just keeps the fantasy app data fresh.
  */
@@ -789,20 +897,40 @@ function formatDiff(data: any): string {
 
 async function handleJoin(msg: BotMessage): Promise<string> {
   const appUrl = `${FANTASY_BASE}/matches`;
-  const state = await getActiveState(msg.groupId);
+
+  // For joining, always prefer the NEXT UPCOMING match over the currently live one.
+  // Once a match has started you can't change your team, so pointing to a live match
+  // for "join" is misleading — return the soonest future match instead.
+  const { data: states } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", msg.groupId)
+    .not("announced_at", "is", null)
+    .is("completed_at", null);
+
+  const now = Date.now();
+  const future = (states ?? []).filter((s) => new Date(s.scheduled_at).getTime() > now);
+  const upcoming = future.sort(
+    (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+  )[0];
+
+  // Fall back to live match if there's no upcoming one
+  const state = upcoming ?? (await getActiveState(msg.groupId));
 
   if (!state) {
     return `Ipo active contest illai da! Next match announce aagum pothu soluven 🏏`;
   }
 
+  const isLive = new Date(state.scheduled_at).getTime() <= now;
   const joinUrl = state.invite_code
     ? `${FANTASY_BASE}/contests/join?code=${state.invite_code}`
     : appUrl;
 
   return (
     `🏏 *Join the Group Contest!*\n\n` +
-    `*${state.team_home} vs ${state.team_away}*\n\n` +
-    `🎯 Invite Code: *${state.invite_code ?? "N/A"}*\n` +
+    `*${state.team_home} vs ${state.team_away}*\n` +
+    (isLive ? `⚠️ _Match already started — joining may be closed_\n` : ``) +
+    `\n🎯 Invite Code: *${state.invite_code ?? "N/A"}*\n` +
     `📱 Link: ${joinUrl}\n\n` +
     `App-la register pannitu inga join pannu! FREE entry 🔥`
   );
