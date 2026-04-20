@@ -1568,3 +1568,17 @@ _Gujarat Titans vs Mumbai Indians_
 
 ---
 
+## Bug #63 — 2026-04-20 21:14:41 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status: `FIXED`
+**Description:** morning recap spam not fixed yet. Should happen only once at 8:30 am and only for previous days game not all previous games.
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !bug morning recap spam not fixed yet. Should happen only once at 8:30 am and only for previous days game not all previous games.
+```
+
+Fix notes: Root cause — morningWinnerAnnouncement was called on every bot startup (index.ts setTimeout at boot). Since the bot restarts multiple times daily, it re-announced on each restart. Fixed by removing the startup call entirely. The 8:30 AM cron in scheduler.ts is the only trigger now — fires once per day at the correct time. The cron's unfinalized query already handles missed announcements (bot was down at 8:30).
+
+---
+
