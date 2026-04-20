@@ -509,7 +509,12 @@ async function getActiveGame(groupId: string, gameType?: string) {
 }
 
 // ===== Create a new game =====
+const _creatingGame = new Set<string>();
+
 async function createGame(groupId: string, gameType: string, state: object) {
+  if (_creatingGame.has(groupId)) return null;
+  _creatingGame.add(groupId);
+  try {
   // Deactivate any existing games in this group
   await supabase
     .from("ba_game_state")
@@ -529,6 +534,9 @@ async function createGame(groupId: string, gameType: string, state: object) {
     .single();
 
   return data;
+  } finally {
+    _creatingGame.delete(groupId);
+  }
 }
 
 // ===== Award points =====
@@ -765,7 +773,8 @@ async function startWordChain(msg: BotMessage): Promise<string> {
     lastPlayer: "bot",
   });
 
-  const lastLetter = word!.slice(-1).toUpperCase();
+  const lastAlphaMatch = word!.match(/[a-zA-Z](?=[^a-zA-Z]*$)/);
+  const lastLetter = lastAlphaMatch ? lastAlphaMatch[0].toUpperCase() : word!.slice(-1).toUpperCase();
 
   return `🔗 *WORD CHAIN GAME*\n\nNaan start pannuren: *${word}*\n\nNext word "${lastLetter}" la start aaganum!\nType *!a <word>* — Repeated words = out!`;
 }
@@ -1232,7 +1241,9 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
 
       state.usedSongs.push(answer);
       // Next song must start with the last letter of the current answer (store lowercase)
-      state.currentLetter = answer.trim().slice(-1).toLowerCase();
+      // Extract last alphabetic character (ignore trailing numbers/emoji/punctuation)
+      const lastAlpha = answer.trim().match(/[a-zA-Z](?=[^a-zA-Z]*$)/);
+      state.currentLetter = lastAlpha ? lastAlpha[0].toLowerCase() : answer.trim().slice(-1).toLowerCase();
       state.lastPlayer = msg.from;
       await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
       await awardPoints(msg.groupId, msg.from, msg.senderName, "antakshari", 5);

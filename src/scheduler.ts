@@ -10,6 +10,7 @@ import { handleGameCommand } from "./features/games.js";
 import {
   dailyScheduleSync,
   dailyContestCreate,
+  morningWinnerAnnouncement,
   preMatchCheck,
   syncLiveScores,
   sendLiveUpdate,
@@ -408,6 +409,20 @@ Use these REAL stats as the foundation. Add Vijay TV award ceremony comedy on to
   }, { timezone: TZ });
 
   // ─── IPL FANTASY PIPELINE ────────────────────────────────────────────────
+
+  // 8:30 AM — Announce previous day's match winners (morning recap for people who slept)
+  cron.schedule("30 8 * * *", async () => {
+    if (!process.env.FANTASY_BOT_SECRET) return;
+    try {
+      const msg = await morningWinnerAnnouncement(groupId);
+      if (msg) {
+        await sendMessage(groupId, msg);
+        addBotMessageToHistory(groupId, msg);
+        addRecentMessage(`[Bot]: ${msg}`);
+        console.log("🌅 Fantasy morning winner recap sent");
+      }
+    } catch (e) { console.error("Fantasy morning recap error:", e); }
+  }, { timezone: TZ });
 
   // 10:00 AM — Sync schedule from Cricbuzz + post today's matches
   cron.schedule("0 10 * * *", async () => {

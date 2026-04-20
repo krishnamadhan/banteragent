@@ -1,0 +1,5 @@
+🐛 *Bug Fix* — !fantasy join now always shows today's match
+
+Fixed: `!fantasy join` was showing yesterday's SRH vs CSK contest instead of today's new matches. The bot was treating any unfinished match as "active" even when it was 17+ hours old. Now stale matches (>8h past start) are auto-closed and today's contests show correctly.
+
+Also new today: !song, !wordle, !memory games — try them!

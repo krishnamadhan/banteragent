@@ -50,6 +50,10 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !quiz — Tamil movie emoji quiz
   !brandquiz — Guess the Indian brand
   !dialogue — Guess movie from dialogue
+  !song — Guess Tamil song from English lyrics
+  !wordle — Group Wordle (Tamil movie titles!)
+  !w <word> — Submit a Wordle guess
+  !memory — Memorize & recall word sequence
   !songlyric — Complete the song lyric
   !riddle — Tamil riddle
   !fastfinger (!ff) — First to type wins!
@@ -159,6 +163,8 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "brandquiz":
     case "logoquiz":
     case "dialogue":
+    case "song":
+    case "wordle":
     case "songlyric":
     case "wyr":
     case "wordchain":
@@ -175,8 +181,12 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "story":
     case "twotruthsonelie":
     case "2t1l":
+    case "memory":
     case "score":
       return handleGameCommand(command, args, msg);
+
+    case "w":  // Wordle guess: !w <word>
+      return handleGameCommand("wordle_guess", args, msg);
 
     case "a":      // short alias for !answer
     case "answer":
@@ -362,6 +372,21 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
           `Praise ${args || msg.senderName} warmly and genuinely in Tanglish. Start DIRECTLY with the praise — do NOT say "Dei [sender]" or acknowledge ${msg.senderName} first. Go straight to celebrating ${args || msg.senderName}. Be specific, heartfelt, and make them feel like a legend.`
         ),
       };
+
+    // Bug approve/reject
+    case "approve": {
+      const pendingPath = "/home/pi/banteragent/pending-fix.md";
+      const { existsSync } = await import("fs");
+      if (!existsSync(pendingPath)) return { response: "No pending fix to approve da 🤷" };
+      fetch("http://127.0.0.1:3099/apply-fix", { method: "POST" }).catch(console.error);
+      return { response: "✅ Fix approved! Applying now — bot will restart in ~30s..." };
+    }
+    case "reject": {
+      const { unlinkSync, existsSync: exists2 } = await import("fs");
+      if (!exists2("/home/pi/banteragent/pending-fix.md")) return { response: "No pending fix da 🤷" };
+      unlinkSync("/home/pi/banteragent/pending-fix.md");
+      return { response: "❌ Fix rejected and cleared. Bug stays open for manual review." };
+    }
 
     // Bug report
     case "bug":

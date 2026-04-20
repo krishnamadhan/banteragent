@@ -138,8 +138,8 @@ async function sendReleaseAnnouncement(groupId: string) {
   try {
     const content = fs.readFileSync(pendingPath, "utf-8").trim();
     if (!content) return;
-    await client.sendMessage(groupId, content);
     fs.renameSync(pendingPath, path.resolve("last-release.txt"));
+    await client.sendMessage(groupId, content);
     console.log("📢 Release announcement sent to group!");
   } catch (e) {
     console.error("Failed to send release announcement:", e);
