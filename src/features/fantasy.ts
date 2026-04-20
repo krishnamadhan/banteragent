@@ -749,9 +749,11 @@ export async function morningWinnerAnnouncement(groupId: string): Promise<string
     // Only announce if the match is actually done
     if (!matchStatus || !["completed", "in_review"].includes(matchStatus)) continue;
 
-    // Mark completed in our state if not already done
+    // Mark completed in our state if not already done.
+    // Use a timestamp within yesterday's window (not now) so tomorrow's morning
+    // recap won't re-pick this match in its "completedYesterday" query.
     if (!state.completed_at) {
-      await saveState(state.match_id, { completed_at: new Date().toISOString() });
+      await saveState(state.match_id, { completed_at: new Date(yesterdayEndUTC.getTime() - 1).toISOString() });
     }
 
     const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);

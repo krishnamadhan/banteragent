@@ -1435,7 +1435,7 @@ App-la register pannitu inga join pannu
 
 ## Bug #57 — 2026-04-19 18:37:15 IST
 **Reporter:** Preethiga (`916374404892@c.us`)
-**Status:** `OPEN`
+**Status:** `FIXED`
 **Description:** app is showing a “Something went wrong” message while loading
 
 **Recent chat context:**
@@ -1457,6 +1457,114 @@ Bore adikutha? !quiz or !song try pannu da!
 ```
 
 **Fix notes:** Two root causes: (1) `contests/browse/[matchId]/page.tsx` used `.single()` for the match query — Supabase v2 `.single()` returns an error object on 0 rows but doesn't throw; however, changed to `.maybeSingle()` for consistency and to avoid any PostgREST error propagation. (2) `matches/[id]/live/page.tsx` had `export const revalidate = 0` instead of `export const dynamic = “force-dynamic”` — on Vercel, `revalidate = 0` still goes through the CDN layer which can serve stale or cached auth session data to the wrong user, causing SSR failures. Changed to `force-dynamic` so every request gets a fresh server-side render with the correct auth session. The error.tsx boundary added in Bug #49 continues to provide a “Try Again” fallback for any remaining intermittent Supabase timeouts. Deploy: push ipl-fantasy.
+
+---
+
+## Bug #58 — 2026-04-19 21:07:56 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** ipl fantasy player names are truncated and difficult to view on mobile version, make full name visible without disruption of layout
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !fantasy diff madhan siva
+  [Bot]: 🔄 *TEAM DIFF*
+Krishna Madhan (#3) vs sivaramana1999 (#4)
+
+━━━━━━━━━━━━━━━━━━
+🔀 *DIFFERENT PLAYERS*
+━━━━━━━━━━━━━━━━━━
+
+👤 *Only Krishna Madhan has:*
+🧤 Mukul Choudhary (Lucknow Super Giants)
+🧤 Prab
+  [Krishna Madhan]: Mitchel owen ah adhu mitchel marsh nu nenaichen
+  [Krishna Madhan]: Faaaah
+  [Krishna Madhan]: !bug ipl fantasy player names are truncated and difficult to view on mobile version, make full name visible without disruption of layout
+```
+
+**Fix notes:** Root cause — multiple pages used CSS `truncate` (whitespace-nowrap + overflow-hidden + text-ellipsis) and an explicit `max-w-[80px]` on player name spans in the diff view. On a mobile screen (~360px), the diff page splits into two 180px columns and `max-w-[80px]` was cutting off half the name. Fixed across four locations: (1) `diff/page.tsx` `renderCell`: removed `max-w-[80px]`, replaced `truncate` with `break-words leading-snug` so names wrap instead of clip. (2) Captain row in diff: same change + added `flex-1` to the name container. (3) VC row in diff: same change. (4) Common players section in diff: same change. (5) `PlayerPointsCard.tsx`: changed `truncate` to `break-words leading-snug` so live-match player names also wrap fully. Deploy: push ipl-fantasy.
+
+---
+
+## Bug #59 — 2026-04-19 21:20:59 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** fix name issues
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: New feature, bug report panna odaney oru agent spawn on fix pannuvan. Complex ah irundha apporval kepaan
+  [Krishna Madhan]: !bug fix name issues
+```
+
+**Fix notes:** Same root cause as Bug #58 — player name truncation in the diff page and PlayerPointsCard. Fixed by the same CSS change (break-words instead of truncate, removed max-w-[80px]). Deploy: push ipl-fantasy.
+
+---
+
+## Bug #60 — 2026-04-20 01:12:54 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** spam of morning recap
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !bug spam of morning recap
+```
+
+**Fix notes:** Root cause — `morningWinnerAnnouncement` (8:30 AM cron) backtracks unfinalized matches (toss set, completed_at null) and calls `saveState({ completed_at: new Date() })`. This writes TODAY's 8:30 AM timestamp. The next morning, the "completedYesterday" query (which looks for completed_at in yesterday's IST window) picks up this match again and re-announces it — causing perpetual daily spam for any match that was never auto-finalized by sendLiveUpdate. Fixed by saving `completed_at = yesterdayEndUTC - 1ms` (a timestamp within yesterday's window) so the morning cron never re-picks the same match. Deploy: restart bot.
+
+---
+
+## Bug #61 — 2026-04-20 19:37:05 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** fantasy sync failed
+
+**Recent chat context:**
+```
+  [Sivaramana]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Gujarat Titans vs Mumbai Indians_
+
+🥇 *Krishna Madhan* — 0 pts
+   _Team 1_
+🥈 *preethigamuruga* — 0 pts
+   _Team 1_
+🥉 *indhusravanoffi* — 0 pts
+   _Team 1_
+4. *madhumithakan
+  [Krishna Madhan]: !fantasy sync
+  [Bot]: Sync failed: Unauthorized
+  [Krishna Madhan]: !bug fantasy sync failed
+```
+
+**Fix notes:** Root cause — `!fantasy sync` calls the bot's `/api/bot/playing-xi` POST endpoint (botAuth passes fine), which internally calls `/api/admin/sync-squads` with `Authorization: Bearer CRON_SECRET`. But `sync-squads/route.ts` validates via Supabase user session auth (createClient + getUser), ignoring the Authorization header entirely. No user session cookie exists in a server-to-server request, so it always returns 401 Unauthorized. Fixed by adding CRON_SECRET auth support to `sync-squads/route.ts`: if the `Authorization: Bearer CRON_SECRET` header is present, the session check is skipped and the route proceeds with service-role privileges. Deploy: push ipl-fantasy → Vercel auto-deploy.
+
+---
+
+## Bug #62 — 2026-04-20 19:53:32 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** morning recap spam
+
+**Recent chat context:**
+```
+  [preethigamurugan15]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Gujarat Titans vs Mumbai Indians_
+
+🥇 *madhumithakanna* — 58 pts
+   _Team 1_
+🥈 *Krishna Madhan* — 54 pts
+   _Team 1_
+🥉 *preethigamuruga* — 54 pts
+   _Team 1_
+4. *sivaramana
+  [Krishna Madhan]: !bug morning recap spam
+```
+
+**Fix notes:** Same root cause and fix as Bug #60 — morning recap using wrong completed_at timestamp. Deploy: restart bot.
 
 ---
 
