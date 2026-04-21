@@ -152,15 +152,21 @@ const MEMORY_POOLS: Record<string, string[]> = {
 
 // ===== Persistent answer archive — file cache + Supabase backend =====
 // File = fast in-session cache. Supabase = ground truth across restarts/redeployments.
-type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle" | "mostlikely";
+type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle" | "mostlikely" | "riddle" | "tamilproverb" | "songlyric" | "wyr" | "storytime";
 type ArchiveMap = Record<string, Partial<Record<GameType, string[]>>>;
+
+// TTL in days for Claude-generated games (undefined = permanent static-pool game)
+const TTL_DAYS: Partial<Record<GameType, number>> = {
+  riddle: 7, tamilproverb: 7, songlyric: 7, wyr: 7,
+};
 
 const ARCHIVE_DIR = join(process.cwd(), "data");
 const ARCHIVE_PATH = join(ARCHIVE_DIR, "used-answers.json");
 
 if (!existsSync(ARCHIVE_DIR)) mkdirSync(ARCHIVE_DIR, { recursive: true });
 
-let _archive: ArchiveMap = {};
+let _archive: ArchiveMap = {};    // permanent games -- file-backed
+let _ttlArchive: ArchiveMap = {}; // TTL games -- memory-only (synced from Supabase on start)
 try { _archive = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8")); } catch {}
 
 function saveArchive(): void {
@@ -168,24 +174,40 @@ function saveArchive(): void {
 }
 
 function getArchived(groupId: string, type: GameType): string[] {
-  return _archive[groupId]?.[type] ?? [];
+  const perm = _archive[groupId]?.[type] ?? [];
+  const ttl  = _ttlArchive[groupId]?.[type] ?? [];
+  return perm.length && ttl.length ? [...perm, ...ttl] : perm.length ? perm : ttl;
 }
 
 function archiveAnswer(groupId: string, type: GameType, answer: string): void {
-  if (!_archive[groupId]) _archive[groupId] = {};
-  const list = _archive[groupId]![type] ?? [];
   const norm = answer.toLowerCase();
-  if (!list.includes(norm)) list.push(norm);
-  _archive[groupId]![type] = list;
-  saveArchive();
-  // Persist to Supabase (fire-and-forget — file is source of truth for speed)
-  supabase.from("ba_question_archive")
-    .upsert({ group_id: groupId, game_type: type, answer: norm }, { onConflict: "group_id,game_type,answer" })
-    .then(({ error }) => { if (error) console.error("[archive] write:", error.message); });
+  const days = TTL_DAYS[type];
+  if (days) {
+    // TTL game: in-memory only + Supabase with expires_at
+    if (!_ttlArchive[groupId]) _ttlArchive[groupId] = {};
+    const list = _ttlArchive[groupId]![type] ?? [];
+    if (!list.includes(norm)) list.push(norm);
+    _ttlArchive[groupId]![type] = list;
+    const expiresAt = new Date(Date.now() + days * 86_400_000).toISOString();
+    supabase.from("ba_question_archive")
+      .upsert({ group_id: groupId, game_type: type, answer: norm, expires_at: expiresAt }, { onConflict: "group_id,game_type,answer" })
+      .then(({ error }) => { if (error) console.error("[archive] write TTL:", error.message); });
+  } else {
+    // Permanent: file-backed + Supabase
+    if (!_archive[groupId]) _archive[groupId] = {};
+    const list = _archive[groupId]![type] ?? [];
+    if (!list.includes(norm)) list.push(norm);
+    _archive[groupId]![type] = list;
+    saveArchive();
+    supabase.from("ba_question_archive")
+      .upsert({ group_id: groupId, game_type: type, answer: norm }, { onConflict: "group_id,game_type,answer" })
+      .then(({ error }) => { if (error) console.error("[archive] write:", error.message); });
+  }
 }
 
 function resetArchive(groupId: string, type: GameType): void {
   if (_archive[groupId]) delete _archive[groupId]![type];
+  if (_ttlArchive[groupId]) delete _ttlArchive[groupId]![type];
   saveArchive();
   supabase.from("ba_question_archive")
     .delete().eq("group_id", groupId).eq("game_type", type)
@@ -194,25 +216,63 @@ function resetArchive(groupId: string, type: GameType): void {
 
 export async function clearGroupArchive(groupId: string): Promise<void> {
   delete _archive[groupId];
+  delete _ttlArchive[groupId];
   saveArchive();
   supabase.from("ba_question_archive")
     .delete().eq("group_id", groupId)
     .then(({ error }) => { if (error) console.error("[archive] clear:", error.message); });
 }
 
-// Call once on bot startup — loads Supabase archive into file cache (handles wipe/redeployment)
+export function getArchiveStats(groupId: string): Array<{ type: string; used: number; total: number | string }> {
+  const pools: Partial<Record<GameType, number | string>> = {
+    quiz: CURATED_QUIZZES.length,
+    brandquiz: CURATED_BRAND_QUIZZES.length,
+    trivia: CURATED_TRIVIA.length,
+    song: SONG_QUIZ.length,
+    wordle: WORDLE_WORDS.length,
+    fastfinger: FASTFINGER_WORDS.length,
+    dialogue: CURATED_DIALOGUES.length,
+    twotruthsonelie: TWO_TRUTHS_ONE_LIE.length,
+    mostlikely: MOSTLIKELY_SCENARIOS.length,
+    memory: Object.keys(MEMORY_POOLS).length,
+    storytime: STORY_STARTERS.length,
+    riddle: RIDDLE_CATEGORIES.length,
+    tamilproverb: "∞",
+    songlyric: "∞",
+    wyr: WYR_THEMES.length,
+  };
+  const results: Array<{ type: string; used: number; total: number | string }> = [];
+  for (const [type, total] of Object.entries(pools)) {
+    const used = getArchived(groupId, type as GameType).length;
+    results.push({ type, used, total: total ?? "∞" });
+  }
+  return results;
+}
+
+// Call once on bot startup -- loads Supabase archive into caches (handles wipe/redeployment)
 export async function syncArchiveFromSupabase(): Promise<void> {
   try {
-    const { data } = await supabase.from("ba_question_archive").select("group_id, game_type, answer");
-    if (!data?.length) return;
+    const now = new Date();
+    const { data: rawData, error } = await supabase
+      .from("ba_question_archive")
+      .select("group_id, game_type, answer, expires_at");
+    const rows = error
+      ? (await supabase.from("ba_question_archive").select("group_id, game_type, answer")).data ?? []
+      : (rawData ?? []).filter((r: any) => !r.expires_at || new Date(r.expires_at) > now);
+    if (!rows.length) return;
     let added = 0;
-    for (const row of data) {
-      if (!_archive[row.group_id]) _archive[row.group_id] = {};
-      const list = _archive[row.group_id]![row.game_type as GameType] ?? [];
+    for (const row of rows) {
+      const isTTL = !!TTL_DAYS[row.game_type as GameType];
+      const map = isTTL ? _ttlArchive : _archive;
+      if (!map[row.group_id]) map[row.group_id] = {};
+      const list = map[row.group_id]![row.game_type as GameType] ?? [];
       if (!list.includes(row.answer)) { list.push(row.answer); added++; }
-      _archive[row.group_id]![row.game_type as GameType] = list;
+      map[row.group_id]![row.game_type as GameType] = list;
     }
-    if (added > 0) { saveArchive(); console.log(`[archive] Synced ${added} new entries from Supabase`); }
+    if (added > 0) {
+      saveArchive();
+      console.log(`[archive] Synced ${added} new entries from Supabase`);
+    }
   } catch (e) { console.error("[archive] Supabase sync failed:", e); }
 }
 
@@ -724,6 +784,7 @@ HINT: <hint about the song mood or movie — not the missing word>`;
 
   if (!lyric || !answer) return "Song lyric generate panna mudiyala. Try again!";
 
+  if (song) archiveAnswer(msg.groupId, "songlyric", song.toLowerCase());
   await createGame(msg.groupId, "songlyric", {
     lyric,
     answer: answer.toLowerCase(),
@@ -739,7 +800,10 @@ HINT: <hint about the song mood or movie — not the missing word>`;
 
 // ===== WOULD YOU RATHER =====
 async function startWYR(msg: BotMessage): Promise<string> {
-  const theme = randPick(WYR_THEMES);
+  const archivedWYR = getArchived(msg.groupId, "wyr");
+  let wyr_pool = WYR_THEMES.filter(t => !archivedWYR.includes(t.toLowerCase()));
+  if (wyr_pool.length === 0) { resetArchive(msg.groupId, "wyr"); wyr_pool = WYR_THEMES; }
+  const theme = randPick(wyr_pool)!;
   const prompt = `Generate ONE funny "Would You Rather" question themed around: ${theme}. Both options should be equally painful/funny. Write in Tanglish.
 
 Respond in this format ONLY (no extra text):
@@ -755,6 +819,7 @@ OPTION_B: <second option>`;
     return "WYR generate panna mudiyala. Try again!";
   }
 
+  archiveAnswer(msg.groupId, "wyr", theme.toLowerCase());
   await createGame(msg.groupId, "wyr", { optA, optB, votesA: [], votesB: [] });
 
   return `🤔 *WOULD YOU RATHER?*\n\n🅰️ ${optA}\n\nOR\n\n🅱️ ${optB}\n\nType *!a A* or *!a B*`;
@@ -915,12 +980,16 @@ async function handleWordleGuess(args: string, msg: BotMessage): Promise<string>
 
 // ===== MEMORY — Memorize and recall a sequence of words =====
 async function startMemory(msg: BotMessage): Promise<string> {
-  const categories = Object.keys(MEMORY_POOLS);
-  const category = randPick(categories)!;
+  const allCategories = Object.keys(MEMORY_POOLS);
+  const archivedMem = getArchived(msg.groupId, "memory");
+  let avail_mem = allCategories.filter(c => !archivedMem.includes(c.toLowerCase()));
+  if (avail_mem.length === 0) { resetArchive(msg.groupId, "memory"); avail_mem = allCategories; }
+  const category = randPick(avail_mem)!;
   const pool = MEMORY_POOLS[category]!;
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
   const words = shuffled.slice(0, 5);
 
+  archiveAnswer(msg.groupId, "memory", category.toLowerCase());
   await createGame(msg.groupId, "memory", {
     category,
     words,
@@ -1352,7 +1421,10 @@ const RIDDLE_CATEGORIES = [
 ];
 
 async function startRiddle(msg: BotMessage): Promise<string> {
-  const cat = randPick(RIDDLE_CATEGORIES);
+  const archivedRiddle = getArchived(msg.groupId, "riddle");
+  let riddle_pool = RIDDLE_CATEGORIES.filter(c => !archivedRiddle.includes(c.toLowerCase()));
+  if (riddle_pool.length === 0) { resetArchive(msg.groupId, "riddle"); riddle_pool = RIDDLE_CATEGORIES; }
+  const cat = randPick(riddle_pool);
   const content = await generateStructured(
     `Generate a classic Tamil-style riddle about: ${cat}.
 The riddle should be solvable by a Tamil person with cultural knowledge. One clear, short answer.
@@ -1375,6 +1447,7 @@ HINT: <one more clue that narrows it down without giving it away>`
 
   if (!riddle || !answer) return "Riddle generate panna mudiyala. Try again!";
 
+  archiveAnswer(msg.groupId, "riddle", cat!.toLowerCase());
   await createGame(msg.groupId, "riddle", { riddle, answer: answer.toLowerCase(), hint: hint ?? "", attempts: 0, hintGiven: false });
   return `🧩 *RIDDLE TIME*\n\n${riddle}\n\n_Type *!a <answer>* to guess_\n3 wrong attempts → hint varum!`;
 }
@@ -1605,6 +1678,7 @@ HINT: <hint about the context/situation it applies to, without giving away the m
 
   if (!proverb || !meaning) return "Proverb generate panna mudiyala. Try again!";
 
+  archiveAnswer(msg.groupId, "tamilproverb", proverb.toLowerCase().slice(0, 60));
   await createGame(msg.groupId, "tamilproverb", {
     proverb, answer: meaning.toLowerCase(), hint: hint ?? "", attempts: 0, hintGiven: false,
   });
@@ -1638,7 +1712,11 @@ const STORY_STARTERS = [
 ];
 
 async function startStoryTime(msg: BotMessage): Promise<string> {
-  const startLine = randPick(STORY_STARTERS);
+  const archivedStory = getArchived(msg.groupId, "storytime");
+  let story_pool = STORY_STARTERS.filter(s => !archivedStory.includes(s.toLowerCase().slice(0, 60)));
+  if (story_pool.length === 0) { resetArchive(msg.groupId, "storytime"); story_pool = STORY_STARTERS; }
+  const startLine = randPick(story_pool)!;
+  archiveAnswer(msg.groupId, "storytime", startLine.toLowerCase().slice(0, 60));
   await createGame(msg.groupId, "storytime", {
     lines: [{ author: "Bot", text: startLine }],
     maxLines: 8,

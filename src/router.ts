@@ -1,6 +1,6 @@
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
-import { handleGameCommand, clearGroupArchive } from "./features/games.js";
+import { handleGameCommand, clearGroupArchive, getArchiveStats } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
 import { handleStatsCommand } from "./features/analytics.js";
@@ -32,6 +32,8 @@ function parseCommand(text: string): { command: string; args: string } {
 
   return { command, args };
 }
+
+const _refreshConfirmPending = new Map<string, number>(); // groupId => ts
 
 export async function routeMessage(msg: BotMessage, recentMessages: string[] = []): Promise<CommandResult> {
   const { command, args } = parseCommand(msg.text);
@@ -157,7 +159,7 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
 🐛 *Feedback:*
   !bug <description> — Report a bug or issue
-  !refreshgames — Reset game archive (owner only)`,
+  !refreshgames — View archive stats + reset (owner only)\n!gamestats — View game archive stats`,
       };
 
     // Games
@@ -394,11 +396,32 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "refreshgames":
     case "resetgames": {
       const ownerPhone = process.env.BOT_OWNER_PHONE;
-      const senderJid = msg.from; // e.g. "919487506127@s.whatsapp.net"
+      const senderJid = msg.from;
       const isOwner = ownerPhone && senderJid.startsWith(ownerPhone.replace("@c.us", "").replace("@s.whatsapp.net", ""));
       if (!isOwner) return { response: "Only group admin can use !refreshgames da 😤" };
-      await clearGroupArchive(msg.groupId);
-      return { response: "🎮 Game archive cleared! All questions are fresh again. Namma ku vaazhga, game kudhikaalam! Let's play!" };
+      const confirmArg = args[0]?.toLowerCase();
+      if (confirmArg === "confirm") {
+        const pending = _refreshConfirmPending.get(msg.groupId);
+        if (!pending || Date.now() - pending > 60_000) {
+          return { response: "Confirm window expired. Send *!refreshgames* again to start." };
+        }
+        _refreshConfirmPending.delete(msg.groupId);
+        await clearGroupArchive(msg.groupId);
+        return { response: "✅ Game archive cleared! All games are fresh. Let's play! 🎮" };
+      }
+      const stats = getArchiveStats(msg.groupId);
+      _refreshConfirmPending.set(msg.groupId, Date.now());
+      const statLines = stats.filter(s => s.used > 0).map(s => `  ${s.type}: ${s.used}/${s.total} used`);
+      const totalUsed = stats.reduce((n, s) => n + s.used, 0);
+      const statsBlock = statLines.length ? statLines.join("\n") : "  (no games played yet)";
+      return { response: `📊 *Game Archive Stats*\n――――――――――――――\n${statsBlock}\n――――――――――――――\nTotal: ${totalUsed} questions played\n\nSend *!refreshgames confirm* within 60s to reset all` };
+    }
+
+    case "gamestats": {
+      const stats = getArchiveStats(msg.groupId);
+      const lines = stats.map(s => `  ${s.type}: ${s.used}/${s.total}`);
+      const totalUsed = stats.reduce((n, s) => n + s.used, 0);
+      return { response: `📊 *Game Stats*\n――――――――――――――\n${lines.join("\n")}\n――――――――――――――\nTotal played: ${totalUsed}` };
     }
 
     case "bug":
