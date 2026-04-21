@@ -9,6 +9,7 @@ import { startScheduler } from "./scheduler.js";
 import { supabase } from "./supabase.js";
 import { seedKnownCouples } from "./features/profiles.js";
 import { syncArchiveFromSupabase } from "./features/games.js";
+import { startInternalServer } from "./internal-server.js";
 
 let client: InstanceType<typeof Client>;
 
@@ -137,8 +138,8 @@ async function sendReleaseAnnouncement(groupId: string) {
   try {
     const content = fs.readFileSync(pendingPath, "utf-8").trim();
     if (!content) return;
-    await client.sendMessage(groupId, content);
     fs.renameSync(pendingPath, path.resolve("last-release.txt"));
+    await client.sendMessage(groupId, content);
     console.log("📢 Release announcement sent to group!");
   } catch (e) {
     console.error("Failed to send release announcement:", e);
@@ -158,4 +159,5 @@ process.on("SIGINT",  () => shutdown("SIGINT"));
 console.log("🤖 BanterAgent v3 (whatsapp-web.js Edition)");
 console.log("=============================================\n");
 console.log("⏳ Starting browser... (first run takes ~30 seconds)\n");
+startInternalServer();
 connectToWhatsApp();

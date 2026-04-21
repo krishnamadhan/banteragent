@@ -29,6 +29,7 @@ function sharedRules(): string {
 - ZODIAC: Never bring up zodiac/rasi unprompted. Only relevant when (a) the user mentions their own sign in this conversation or (b) it's an !astro command. Never use it as a label or nickname (❌ "Cancer boy", "Leo thala"). Never invent a sign — only use what's explicitly stated. If corrected, say "Noted da" and move on.
 - POLITICS: This group backs TVK (Vijay Makkal Iyakkam). Roast DMK and AIADMK with comedy, root for TVK. Playful fan banter only — never genuine hate.
 - STATEFUL GAME BAN: Never run multi-turn games (Blackjack, Poker, Chess, Rummy) through conversation — state breaks. If asked, say "!bj / card games coming soon da! Try !quiz, !ff, or !2t1l 🎮" and stop.
+- CRICKET SCORES: NEVER mention specific live match scores, today's IPL fixtures, or recent results from memory — that data is stale and wrong. If asked about today's match or scores, redirect: "Dei, !cricket type panna live score solluven da 🏏"
 - Never offensive about caste, religion, or gender.
 - TODAY (IST): ${getISTDateString()} — ${getISTYear()} is the current year, not the future.
 - Tamil friends group, ages 20–35.`;
@@ -100,25 +101,32 @@ ${sharedRules()}`;
 // BASE_SYSTEM_PROMPT for non-chat uses — function so date is fresh on each call
 function getBaseSystemPrompt(): string { return buildModePrompt("roast"); }
 
+// Wrap a system prompt string as a cacheable content block.
+// Reduces input token costs by ~90% when the same prompt is reused within 5 minutes.
+function cached(text: string): Array<{ type: "text"; text: string; cache_control: { type: "ephemeral" } }> {
+  return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+}
+
 const STRUCTURED_PROMPT = `You generate content for a Tamil WhatsApp group bot. Follow the requested format EXACTLY. Do not add extra commentary or deviate from the format. When the format says Tanglish, write Tamil in English alphabets.`;
 
 // In-memory conversation history per group
 const groupHistory = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
 const MAX_HISTORY = 15;
 
-// Per-group bot mode (in-memory; loaded from DB once per session)
+// Per-group bot mode (in-memory; refreshed from DB every 30 min)
 const groupModes = new Map<string, string>();
-const modeLoadedGroups = new Set<string>();
+const modeLoadTime = new Map<string, number>();
+const MODE_TTL_MS = 30 * 60 * 1000;
 
 export function setGroupMode(groupId: string, mode: string): void {
   groupModes.set(groupId, mode);
-  modeLoadedGroups.add(groupId); // mark as loaded so we don't overwrite with DB value
-  // Clear conversation history so old mode's tone doesn't bleed into the new mode
+  modeLoadTime.set(groupId, Date.now());
   groupHistory.delete(groupId);
 }
 
 export async function getGroupMode(groupId: string): Promise<string> {
-  if (!modeLoadedGroups.has(groupId)) {
+  const lastLoad = modeLoadTime.get(groupId) ?? 0;
+  if (Date.now() - lastLoad > MODE_TTL_MS) {
     // Lazy-load from DB once per session
     try {
       const { supabase } = await import("./supabase.js");
@@ -137,7 +145,7 @@ export async function getGroupMode(groupId: string): Promise<string> {
     } catch (e) {
       console.warn(`[mode] Exception loading mode for ${groupId}:`, e);
     }
-    modeLoadedGroups.add(groupId);
+    modeLoadTime.set(groupId, Date.now());
   }
   return groupModes.get(groupId) ?? "nanban";
 }
@@ -194,7 +202,7 @@ export async function getChatResponse(
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 300,
-      system: systemPrompt,
+      system: cached(systemPrompt),
       messages: history,
     });
 
@@ -233,7 +241,7 @@ export async function generateStructured(prompt: string): Promise<string> {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 500,
-      system: STRUCTURED_PROMPT,
+      system: cached(STRUCTURED_PROMPT),
       messages: [{ role: "user", content: prompt }],
     });
     const text = response.content[0].type === "text"
@@ -254,7 +262,7 @@ export async function generateContent(prompt: string): Promise<string> {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 500,
-      system: getBaseSystemPrompt(),
+      system: cached(getBaseSystemPrompt()),
       messages: [{ role: "user", content: prompt }],
     });
     const text = response.content[0].type === "text"
@@ -297,12 +305,18 @@ If no: reply EXACTLY: __SILENT__
 Less is more — only jump in when it adds value or comedy.`;
 
   try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 200,
-      system: buildModePrompt(mode),
-      messages: [{ role: "user", content: prompt }],
-    });
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("shouldAutoRespond timeout")), 8000)
+    );
+    const response = await Promise.race([
+      client.messages.create({
+        model: MODEL,
+        max_tokens: 200,
+        system: cached(buildModePrompt(mode)),
+        messages: [{ role: "user", content: prompt }],
+      }),
+      timeout,
+    ]);
 
     const text = response.content[0].type === "text" ? response.content[0].text : "__SILENT__";
     const silent = text.includes("__SILENT__");

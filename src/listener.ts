@@ -1,3 +1,5 @@
+import { handleAdminCommand } from "./admin-handler.js";
+import { handlePiAdminMessage } from "./pi-admin.js";
 import type { BotMessage } from "./types.js";
 import { routeMessage } from "./router.js";
 import { trackMessage } from "./features/analytics.js";
@@ -6,13 +8,13 @@ import { getGroupSettings } from "./group-settings-cache.js";
 import { extractProfileInfo, getZodiacQuestion } from "./features/profiles.js";
 import { pickMeme, sendMeme } from "./features/memes.js";
 
-// ===== Auto-response state =====
-let lastAutoResponseTime = 0;
-let lastAutoRespondCheckTime = 0; // rate-limits ALL shouldAutoRespond calls, not just successful ones
+// ===== Auto-response state (per-group) =====
+const lastAutoResponseTime = new Map<string, number>();
+const lastAutoRespondCheckTime = new Map<string, number>();
+const autoResponsesCount = new Map<string, number>();
+const autoResponseDate = new Map<string, string>();
 let lastGroupMessageAt = 0;
 export function getLastGroupMessageTime(): number { return lastGroupMessageAt; }
-let autoResponsesCount = 0;
-let autoResponseDate = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10); // IST date
 
 // ===== Per-user command rate limiting =====
 const userLastCommand = new Map<string, number>();
@@ -76,6 +78,15 @@ export async function handleMessage(client: any, rawMsg: any) {
   const ownerPhone = process.env.BOT_OWNER_PHONE;
   if (!isGroup && senderPhone !== ownerPhone) return;
 
+  // Handle admin commands from owner personal chat
+  if (await handleAdminCommand(client, senderPhone, isGroup, text)) return;
+
+  // Handle !pi admin commands (works in DM + group, checks admin internally)
+  if (text.trim().toLowerCase().startsWith("!pi")) {
+    const replyTo = isGroup ? groupId : senderPhone;
+    if (await handlePiAdminMessage(client, senderPhone, isGroup, replyTo, text.trim())) return;
+  }
+
   // Track last message time for auto-game-drop
   if (isGroup) lastGroupMessageAt = Date.now();
 
@@ -123,7 +134,10 @@ export async function handleMessage(client: any, rawMsg: any) {
     // Exempt !a / !answer (game answers are time-sensitive — players must respond quickly)
     const cmdWord = lowerText.startsWith("!") ? lowerText.slice(1).split(/\s+/)[0] : "";
     const isAnswerCmd = cmdWord === "a" || cmdWord === "answer";
-    if (isCommand && !isAnswerCmd) {
+    // Bug reports are instant file writes — no reason to rate-limit them, and we never
+    // want the command AFTER a !bug to get silently dropped (Bug #42).
+    const isBugCmd = cmdWord === "bug";
+    if (isCommand && !isAnswerCmd && !isBugCmd) {
       const lastCmd = userLastCommand.get(senderPhone) ?? 0;
       if (Date.now() - lastCmd < COMMAND_COOLDOWN_MS) return;
       userLastCommand.set(senderPhone, Date.now());
@@ -147,6 +161,9 @@ export async function handleMessage(client: any, rawMsg: any) {
       const zodiacQ = await getZodiacQuestion(msg.groupId, msg.from, msg.senderName).catch(() => null);
       if (zodiacQ) fullResponse = response + "\n\n" + zodiacQ;
     }
+
+    // Empty response = handler already sent its own message (e.g. memory game sends + schedules deletion)
+    if (!fullResponse.trim()) return;
 
     await sendReply(client, rawMsg, fullResponse, mentions);
 
@@ -184,18 +201,19 @@ export async function handleMessage(client: any, rawMsg: any) {
  * Evaluate whether bot should auto-respond
  */
 async function evaluateAutoResponse(msg: BotMessage): Promise<string | null> {
+  const gid = msg.groupId;
   const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10); // IST date
-  if (today !== autoResponseDate) {
-    autoResponsesCount = 0;
-    autoResponseDate = today;
+  if (today !== autoResponseDate.get(gid)) {
+    autoResponsesCount.set(gid, 0);
+    autoResponseDate.set(gid, today);
   }
 
   const dailyMax = parseInt(process.env.AUTO_RESPONSE_DAILY_MAX ?? "8");
-  if (autoResponsesCount >= dailyMax) return null;
+  if ((autoResponsesCount.get(gid) ?? 0) >= dailyMax) return null;
 
   // 45-min cooldown after a SUCCESSFUL auto-response
   const cooldownMs = parseInt(process.env.AUTO_RESPONSE_COOLDOWN_MINS ?? "45") * 60 * 1000;
-  if (Date.now() - lastAutoResponseTime < cooldownMs) return null;
+  if (Date.now() - (lastAutoResponseTime.get(gid) ?? 0) < cooldownMs) return null;
 
   const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
   const nightStart = parseInt(process.env.NIGHT_MODE_START ?? "23");
@@ -212,7 +230,7 @@ async function evaluateAutoResponse(msg: BotMessage): Promise<string | null> {
   // 10-min cooldown between ANY Claude shouldAutoRespond calls (prevents burst spending
   // when the group is active but Claude keeps saying __SILENT__)
   const checkCooldownMs = 10 * 60 * 1000;
-  if (Date.now() - lastAutoRespondCheckTime < checkCooldownMs) return null;
+  if (Date.now() - (lastAutoRespondCheckTime.get(gid) ?? 0) < checkCooldownMs) return null;
 
   const mode = await getGroupMode(msg.groupId);
   const response = await shouldAutoRespond(
@@ -221,12 +239,12 @@ async function evaluateAutoResponse(msg: BotMessage): Promise<string | null> {
     msg.senderName,
     mode
   );
-  lastAutoRespondCheckTime = Date.now(); // update regardless of SILENT or response
+  lastAutoRespondCheckTime.set(gid, Date.now()); // update regardless of SILENT or response
 
   if (response) {
-    lastAutoResponseTime = Date.now();
-    autoResponsesCount++;
-    console.log(`🤖 Auto-response #${autoResponsesCount} to [${msg.senderName}]`);
+    lastAutoResponseTime.set(gid, Date.now());
+    autoResponsesCount.set(gid, (autoResponsesCount.get(gid) ?? 0) + 1);
+    console.log(`Auto-response #${autoResponsesCount.get(gid)} to [${msg.senderName}]`);
   }
 
   return response;

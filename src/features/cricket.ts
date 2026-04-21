@@ -124,6 +124,12 @@ const lastCommentaryAt = new Map<string, number>();
 export async function checkCricketUpdates(groupId: string): Promise<
   Array<{ groupId: string; message: string }>
 > {
+  // Guard: only poll during IPL match windows (3:30 PM – 11:00 PM IST)
+  const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+  const istMin  = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCMinutes();
+  const istTotalMins = istHour * 60 + istMin;
+  if (istTotalMins < 15 * 60 + 30 || istTotalMins >= 23 * 60) return [];
+
   // Check if alerts are enabled for this group
   const { data: settings } = await supabase
     .from("ba_group_settings")

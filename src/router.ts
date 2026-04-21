@@ -1,6 +1,6 @@
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
-import { handleGameCommand } from "./features/games.js";
+import { handleGameCommand, clearGroupArchive, getArchiveStats } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
 import { handleStatsCommand } from "./features/analytics.js";
@@ -19,6 +19,7 @@ import { handleBugReport } from "./features/bugs.js";
 import { devlog } from "./devlog.js";
 import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
+import { handlePiAdminMessage } from "./pi-admin.js";
 import { handleQuoteCommand } from "./features/quotes.js";
 import { handleFantasyCommand } from "./features/fantasy.js";
 
@@ -31,6 +32,8 @@ function parseCommand(text: string): { command: string; args: string } {
 
   return { command, args };
 }
+
+const _refreshConfirmPending = new Map<string, number>(); // groupId => ts
 
 export async function routeMessage(msg: BotMessage, recentMessages: string[] = []): Promise<CommandResult> {
   const { command, args } = parseCommand(msg.text);
@@ -50,6 +53,10 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !quiz — Tamil movie emoji quiz
   !brandquiz — Guess the Indian brand
   !dialogue — Guess movie from dialogue
+  !song — Guess Tamil song from English lyrics
+  !wordle — Group Wordle (Tamil movie titles!)
+  !w <word> — Submit a Wordle guess
+  !memory — Memorize & recall word sequence
   !songlyric — Complete the song lyric
   !riddle — Tamil riddle
   !fastfinger (!ff) — First to type wins!
@@ -151,7 +158,8 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !fantasy help — Full fantasy help
 
 🐛 *Feedback:*
-  !bug <description> — Report a bug or issue`,
+  !bug <description> — Report a bug or issue
+  !refreshgames — View archive stats + reset (owner only)\n!gamestats — View game archive stats`,
       };
 
     // Games
@@ -159,6 +167,8 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "brandquiz":
     case "logoquiz":
     case "dialogue":
+    case "song":
+    case "wordle":
     case "songlyric":
     case "wyr":
     case "wordchain":
@@ -175,8 +185,12 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "story":
     case "twotruthsonelie":
     case "2t1l":
+    case "memory":
     case "score":
       return handleGameCommand(command, args, msg);
+
+    case "w":  // Wordle guess: !w <word>
+      return handleGameCommand("wordle_guess", args, msg);
 
     case "a":      // short alias for !answer
     case "answer":
@@ -363,7 +377,53 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
         ),
       };
 
+    // Bug approve/reject
+    case "approve": {
+      const pendingPath = "/home/pi/banteragent/pending-fix.md";
+      const { existsSync } = await import("fs");
+      if (!existsSync(pendingPath)) return { response: "No pending fix to approve da 🤷" };
+      fetch("http://127.0.0.1:3099/apply-fix", { method: "POST" }).catch(console.error);
+      return { response: "✅ Fix approved! Applying now — bot will restart in ~30s..." };
+    }
+    case "reject": {
+      const { unlinkSync, existsSync: exists2 } = await import("fs");
+      if (!exists2("/home/pi/banteragent/pending-fix.md")) return { response: "No pending fix da 🤷" };
+      unlinkSync("/home/pi/banteragent/pending-fix.md");
+      return { response: "❌ Fix rejected and cleared. Bug stays open for manual review." };
+    }
+
     // Bug report
+    case "refreshgames":
+    case "resetgames": {
+      const ownerPhone = process.env.BOT_OWNER_PHONE;
+      const senderJid = msg.from;
+      const isOwner = ownerPhone && senderJid.startsWith(ownerPhone.replace("@c.us", "").replace("@s.whatsapp.net", ""));
+      if (!isOwner) return { response: "Only group admin can use !refreshgames da 😤" };
+      const confirmArg = args[0]?.toLowerCase();
+      if (confirmArg === "confirm") {
+        const pending = _refreshConfirmPending.get(msg.groupId);
+        if (!pending || Date.now() - pending > 60_000) {
+          return { response: "Confirm window expired. Send *!refreshgames* again to start." };
+        }
+        _refreshConfirmPending.delete(msg.groupId);
+        await clearGroupArchive(msg.groupId);
+        return { response: "✅ Game archive cleared! All games are fresh. Let's play! 🎮" };
+      }
+      const stats = getArchiveStats(msg.groupId);
+      _refreshConfirmPending.set(msg.groupId, Date.now());
+      const statLines = stats.filter(s => s.used > 0).map(s => `  ${s.type}: ${s.used}/${s.total} used`);
+      const totalUsed = stats.reduce((n, s) => n + s.used, 0);
+      const statsBlock = statLines.length ? statLines.join("\n") : "  (no games played yet)";
+      return { response: `📊 *Game Archive Stats*\n――――――――――――――\n${statsBlock}\n――――――――――――――\nTotal: ${totalUsed} questions played\n\nSend *!refreshgames confirm* within 60s to reset all` };
+    }
+
+    case "gamestats": {
+      const stats = getArchiveStats(msg.groupId);
+      const lines = stats.map(s => `  ${s.type}: ${s.used}/${s.total}`);
+      const totalUsed = stats.reduce((n, s) => n + s.used, 0);
+      return { response: `📊 *Game Stats*\n――――――――――――――\n${lines.join("\n")}\n――――――――――――――\nTotal played: ${totalUsed}` };
+    }
+
     case "bug":
       return { response: handleBugReport(args, msg, recentMessages) };
 
@@ -373,6 +433,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "fl":  // shortcut: !fl = !fantasy leaderboard
       if (command === "fl") return handleFantasyCommand("leaderboard", msg);
       return handleFantasyCommand(args, msg);
+
+    case "pi":
+      return { response: "" }; // handled at listener level (needs client + full JID)
 
     // Free chat (default)
     case "chat":
