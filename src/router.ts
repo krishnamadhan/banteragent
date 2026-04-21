@@ -1,6 +1,6 @@
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
-import { handleGameCommand } from "./features/games.js";
+import { handleGameCommand, clearGroupArchive } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
 import { handleStatsCommand } from "./features/analytics.js";
@@ -155,7 +155,8 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !fantasy help — Full fantasy help
 
 🐛 *Feedback:*
-  !bug <description> — Report a bug or issue`,
+  !bug <description> — Report a bug or issue
+  !refreshgames — Reset game archive (owner only)`,
       };
 
     // Games
@@ -389,6 +390,16 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     }
 
     // Bug report
+    case "refreshgames":
+    case "resetgames": {
+      const ownerPhone = process.env.BOT_OWNER_PHONE;
+      const senderJid = msg.from; // e.g. "919487506127@s.whatsapp.net"
+      const isOwner = ownerPhone && senderJid.startsWith(ownerPhone.replace("@c.us", "").replace("@s.whatsapp.net", ""));
+      if (!isOwner) return { response: "Only group admin can use !refreshgames da 😤" };
+      await clearGroupArchive(msg.groupId);
+      return { response: "🎮 Game archive cleared! All questions are fresh again. Namma ku vaazhga, game kudhikaalam! Let's play!" };
+    }
+
     case "bug":
       return { response: handleBugReport(args, msg, recentMessages) };
 

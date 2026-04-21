@@ -152,7 +152,7 @@ const MEMORY_POOLS: Record<string, string[]> = {
 
 // ===== Persistent answer archive — file cache + Supabase backend =====
 // File = fast in-session cache. Supabase = ground truth across restarts/redeployments.
-type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle";
+type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle" | "mostlikely";
 type ArchiveMap = Record<string, Partial<Record<GameType, string[]>>>;
 
 const ARCHIVE_DIR = join(process.cwd(), "data");
@@ -190,6 +190,14 @@ function resetArchive(groupId: string, type: GameType): void {
   supabase.from("ba_question_archive")
     .delete().eq("group_id", groupId).eq("game_type", type)
     .then(({ error }) => { if (error) console.error("[archive] reset:", error.message); });
+}
+
+export async function clearGroupArchive(groupId: string): Promise<void> {
+  delete _archive[groupId];
+  saveArchive();
+  supabase.from("ba_question_archive")
+    .delete().eq("group_id", groupId)
+    .then(({ error }) => { if (error) console.error("[archive] clear:", error.message); });
 }
 
 // Call once on bot startup — loads Supabase archive into file cache (handles wipe/redeployment)
@@ -1572,7 +1580,11 @@ const MOSTLIKELY_SCENARIOS = [
 ];
 
 async function startMostLikely(msg: BotMessage): Promise<string> {
-  const scenario = randPick(MOSTLIKELY_SCENARIOS);
+  const archived = getArchived(msg.groupId, "mostlikely");
+  const pool = MOSTLIKELY_SCENARIOS.filter(s => !archived.includes(s.toLowerCase()));
+  const scenarioPool = pool.length > 0 ? pool : MOSTLIKELY_SCENARIOS; // reset if all used
+  const scenario = randPick(scenarioPool);
+  archiveAnswer(msg.groupId, "mostlikely", scenario.toLowerCase());
   await createGame(msg.groupId, "mostlikely", { scenario, votes: {} as Record<string, string>, ended: false });
   return `🎯 *MOST LIKELY TO...*\n\n👉 Who in this group is most likely to *${scenario}*?\n\nVote: *!a <person's name>*  (e.g. *!a Madhan*)\nAfter 5 votes, results reveal! 🗳️`;
 }
@@ -2038,12 +2050,25 @@ async function startTwoTruthsOneLie(msg: BotMessage): Promise<string> {
 }
 
 // ===== MAIN HANDLER =====
+const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","tamilproverb","proverb","storytime","story","dialogue","song","wordle","memory","songlyric","wyr","wordchain","antakshari","trivia"]);
+
 export async function handleGameCommand(
   command: string,
   args: string,
   msg: BotMessage
 ): Promise<{ response: string }> {
   let response: string;
+
+  // Block starting a new game while one is already active
+  if (START_GAME_COMMANDS.has(command)) {
+    const active = await getActiveGame(msg.groupId);
+    if (active) {
+      const gameLabel = active.game_type.charAt(0).toUpperCase() + active.game_type.slice(1);
+      return { response: `Dei, *${gameLabel}* already running da! Finish pannunga first 😤
+
+(!a <answer> to play, !skip to abandon)` };
+    }
+  }
 
   switch (command) {
     case "quiz":
