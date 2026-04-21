@@ -19,6 +19,7 @@ import { handleBugReport } from "./features/bugs.js";
 import { devlog } from "./devlog.js";
 import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
+import { handlePiAdminMessage } from "./pi-admin.js";
 import { handleQuoteCommand } from "./features/quotes.js";
 import { handleFantasyCommand } from "./features/fantasy.js";
 
@@ -409,6 +410,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "fl":  // shortcut: !fl = !fantasy leaderboard
       if (command === "fl") return handleFantasyCommand("leaderboard", msg);
       return handleFantasyCommand(args, msg);
+
+    case "pi":
+      return { response: "" }; // handled at listener level (needs client + full JID)
 
     // Free chat (default)
     case "chat":

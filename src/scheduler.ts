@@ -501,4 +501,41 @@ Use these REAL stats as the foundation. Add Vijay TV award ceremony comedy on to
       }
     } catch (e) { console.error("Fantasy leaderboard error:", e); }
   }, { timezone: TZ });
+
+  // ===== DAILY PI HEALTH REPORT — 8:30 AM IST (after morning roast) =====
+  cron.schedule("30 8 * * *", async () => {
+    const adminNum = process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE;
+    if (!adminNum) return;
+    try {
+      const fsMod = await import("fs");
+      const pathMod = await import("path");
+      const statusFile = pathMod.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
+      if (!fsMod.existsSync(statusFile)) return;
+      const age = Date.now() - fsMod.statSync(statusFile).mtimeMs;
+      if (age > 10 * 60 * 1000) return;
+      const s = JSON.parse(fsMod.readFileSync(statusFile, "utf8"));
+      const d = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+      const pm2 = (s.pm2 ?? {}) as Record<string, any>;
+      const ba = pm2["banteragent"] ?? {};
+      const baStatus = ba.status === "online" ? "Online ✅" : "DOWN 🚨";
+      const tempC = s.cpu_temp !== null ? s.cpu_temp + "°C" : "N/A";
+      const tempOk = s.cpu_temp === null || s.cpu_temp < 65;
+      const allGood = tempOk && s.ram_percent < 80 && s.disk_percent < 80 && s.internet_ok && ba.status === "online";
+      const summary = allGood ? "All systems healthy 🟢" : "⚠️ Check individual metrics above";
+      const lines = [
+        "*Daily Pi Report — " + d + "*",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "Temp: " + tempC + " " + (tempOk ? "✅" : "⚠️"),
+        "RAM: " + s.ram_percent + "% " + (s.ram_percent < 80 ? "✅" : "⚠️"),
+        "Disk: " + s.disk_percent + "% " + (s.disk_percent < 80 ? "✅" : "⚠️"),
+        "Battery: " + (s.battery_level ?? "unknown"),
+        "Internet: " + (s.internet_ok ? "Online ✅" : "DOWN 🚨"),
+        "Uptime: " + Math.floor(s.uptime_secs / 86400) + "d " + Math.floor((s.uptime_secs % 86400) / 3600) + "h",
+        "BanterAgent: " + baStatus + " (" + (ba.restarts ?? 0) + " restarts)",
+        "",
+        summary,
+      ];
+      await sendMessage(adminNum, lines.join("\n"));
+    } catch (e) { console.error("Daily Pi report error:", e); }
+  }, { timezone: TZ });
 }

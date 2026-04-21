@@ -1,4 +1,5 @@
 import { handleAdminCommand } from "./admin-handler.js";
+import { handlePiAdminMessage } from "./pi-admin.js";
 import type { BotMessage } from "./types.js";
 import { routeMessage } from "./router.js";
 import { trackMessage } from "./features/analytics.js";
@@ -79,6 +80,12 @@ export async function handleMessage(client: any, rawMsg: any) {
 
   // Handle admin commands from owner personal chat
   if (await handleAdminCommand(client, senderPhone, isGroup, text)) return;
+
+  // Handle !pi admin commands (works in DM + group, checks admin internally)
+  if (text.trim().toLowerCase().startsWith("!pi")) {
+    const replyTo = isGroup ? groupId : senderPhone;
+    if (await handlePiAdminMessage(client, senderPhone, isGroup, replyTo, text.trim())) return;
+  }
 
   // Track last message time for auto-game-drop
   if (isGroup) lastGroupMessageAt = Date.now();
