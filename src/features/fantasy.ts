@@ -265,7 +265,17 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
       announced_at: new Date().toISOString(),
     });
 
-    return buildMatchAnnouncement(match, contest);
+    // Ask Claude to build Machi's team and join the contest
+    let machiLine = "";
+    try {
+      const machiRes = await botFetch("/machi-team", {
+        method: "POST",
+        body: JSON.stringify({ match_id: match.id, contest_id: contest.id }),
+      });
+      if (machiRes?.ok && machiRes.message) machiLine = `\n\n${machiRes.message}`;
+    } catch { /* non-fatal */ }
+
+    return buildMatchAnnouncement(match, contest) + machiLine;
   }
 
   return null;
@@ -320,7 +330,18 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
       toss_notified_at: new Date().toISOString(),
       locked_at: new Date().toISOString(),
     });
-    return buildTossAnnouncement(xiData.match, xiData.playing_xi);
+
+    // Update Machi's team with confirmed playing XI
+    let machiLine = "";
+    try {
+      const machiRes = await botFetch("/machi-team", {
+        method: "PUT",
+        body: JSON.stringify({ match_id: state.match_id }),
+      });
+      if (machiRes?.ok && machiRes.message) machiLine = `\n\n${machiRes.message}`;
+    } catch { /* non-fatal */ }
+
+    return buildTossAnnouncement(xiData.match, xiData.playing_xi) + machiLine;
   }
 
   return null;
@@ -766,7 +787,17 @@ async function handleContest(msg: BotMessage): Promise<string> {
       announced_at: new Date().toISOString(),
     });
 
-    lines.push(buildMatchAnnouncement(match, contest));
+    // Ask Claude to build Machi's team and join
+    let machiLine = "";
+    try {
+      const machiRes = await botFetch("/machi-team", {
+        method: "POST",
+        body: JSON.stringify({ match_id: match.id, contest_id: contest.id }),
+      });
+      if (machiRes?.ok && machiRes.message) machiLine = `\n\n${machiRes.message}`;
+    } catch { /* non-fatal */ }
+
+    lines.push(buildMatchAnnouncement(match, contest) + machiLine);
     created++;
   }
 
