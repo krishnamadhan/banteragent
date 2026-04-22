@@ -352,7 +352,7 @@ Cricket Hall of Fame ku pudhusa rendu per add pannirkaanga but naama still World
   [Krishna Madhan]: !bug if a question has been used then move it archive so that it doesn’t get repeated. During each update cycle add more new questions
 ```
 
-**Fix notes:** _(developer fills this in)_
+**Fix notes:** Players in the XI who had not yet batted or bowled were missing the +4 bonus because they had no f11_player_stats row. Fixed in sync-live/route.ts and edge function: after scorecard upsert, also upsert +4 for all f11_match_players with is_playing_xi=true not already in scorecard.
 
 ---
 
@@ -1582,3 +1582,25 @@ Fix notes: Root cause — morningWinnerAnnouncement was called on every bot star
 
 ---
 
+## Bug #64 — 2026-04-22 19:36:34 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** 4 points for having players from playing11 feature is missing
+
+**Recent chat context:**
+```
+  [Sivaramana]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Lucknow Super Giants vs Rajasthan Royals_
+
+🥇 *madhumithakanna* — 38 pts
+   _Team 1_
+🥈 *preethigamuruga* — 34 pts
+   _Team 1_
+🥉 *machi* — 30 pts
+   _Machi_
+4. *sivaramana19
+  [Krishna Madhan]: !bug 4 points for having players from playing11 feature is missing
+```
+
+**Fix notes:** Root cause — `sync-live` only upserted `f11_player_stats` rows for players appearing in the Cricbuzz scorecard (batted/bowled). Players confirmed in the playing XI via `f11_match_players` who hadn't yet batted or bowled had no stats row, so the +4 XI bonus was never recorded. Fixed in both `src/app/api/cron/sync-live/route.ts` and `supabase/functions/sync-live/index.ts`: after the main scorecard upsert loop, fetch all `f11_match_players` with `is_playing_xi = true` and insert a zero-stat row with `fantasy_points = 4` for any not already covered — using `ignoreDuplicates: true` to avoid overwriting real scorecard data. Deploy: push ipl-fantasy → Vercel auto-deploy.
