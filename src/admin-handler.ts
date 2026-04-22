@@ -35,13 +35,37 @@ export async function handleAdminCommand(
 
       case "battery": {
         const state = readBatteryState();
-        const { stdout } = await execAsync(
-          `python3 -c "import smbus2,json; bus=smbus2.SMBus(1); dv=bus.read_i2c_block_data(0x36,0x02,2); ds=bus.read_i2c_block_data(0x36,0x04,2); bus.close(); raw_v=(dv[0]<<8)|dv[1]; v=(raw_v>>4)*1.25/1000; raw_s=(ds[0]<<8)|ds[1]; soc=(raw_s>>8)+((raw_s&0xFF)/256); print(f'{v:.3f},{soc:.1f}')"`
-        );
-        const [vStr, socStr] = stdout.trim().split(",");
-        const v = parseFloat(vStr), soc = parseFloat(socStr);
+        const pyScript = `
+import smbus2, time
+def read(retries=3):
+    for i in range(retries):
+        bus = smbus2.SMBus(1)
+        try:
+            dv = bus.read_i2c_block_data(0x36,0x02,2)
+            ds = bus.read_i2c_block_data(0x36,0x04,2)
+        finally:
+            bus.close()
+        raw_v=(dv[0]<<8)|dv[1]; v=(raw_v>>4)*1.25/1000
+        raw_s=(ds[0]<<8)|ds[1]; soc=(raw_s>>8)+((raw_s&0xFF)/256)
+        if 2.5<=v<=4.5 and 0<=soc<=100:
+            print(f'{v:.3f},{soc:.1f}'); return
+        time.sleep(2)
+    raise ValueError('bad I2C read')
+read()
+`.trim().replace(/\n/g, "; ");
+        let v: number, soc: number;
+        try {
+          const { stdout } = await execAsync(`python3 -c "${pyScript.replace(/"/g, '\\"')}"`);
+          [v, soc] = stdout.trim().split(",").map(Number);
+        } catch {
+          // Fall back to state file values if I2C is unavailable
+          const s = readBatteryState() as any;
+          reply = `*[Monitor] Battery*\n⚠️ I2C sensor unavailable\nLast known: ${s.last_soc ?? "?"}% (${s.last_voltage ?? "?"}V)\nAC: ${s.ac_ok ? "Connected" : "DISCONNECTED"} | Charging: ${s.charging ? "ON" : "OFF"}`;
+          break;
+        }
         const ac = state.ac_ok === true ? "Connected" : state.ac_ok === false ? "DISCONNECTED" : "Unknown";
-        const charging = state.charging === false ? "OFF (above 90%)" : "ON";
+        const chState = (state as any).charging;
+        const charging = chState === true ? "ON" : chState === false ? "OFF" : "Unknown";
         const vstatus = v >= 3.87 ? "Full" : v >= 3.70 ? "High" : v >= 3.55 ? "Medium" : v >= 3.40 ? "Low" : "Critical";
         const filled = Math.max(0, Math.min(10, Math.round(soc / 10)));
         const bar = "|".repeat(filled) + ".".repeat(10 - filled);

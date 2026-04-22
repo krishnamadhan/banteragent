@@ -1,6 +1,7 @@
 import { handleAdminCommand } from "./admin-handler.js";
 import { handlePiAdminMessage } from "./pi-admin.js";
 import type { BotMessage } from "./types.js";
+import { monGroupMsg } from "./monitor.js";
 import { routeMessage } from "./router.js";
 import { trackMessage } from "./features/analytics.js";
 import { shouldAutoRespond, quickAutoRespondCheck, getGroupMode, addBotMessageToHistory } from "./claude.js";
@@ -112,6 +113,8 @@ export async function handleMessage(client: any, rawMsg: any) {
 
   // Track message for analytics
   trackMessage(msg).catch(console.error);
+  // Monitor: log group activity for engagement analysis
+  if (isGroup) monGroupMsg(senderName, text.startsWith("!"));
   // Extract profile info only from natural chat, not command messages
   if (!text.startsWith("!")) extractProfileInfo(msg).catch(() => {});
 

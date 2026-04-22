@@ -22,8 +22,24 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import Anthropic from "@anthropic-ai/sdk";
 import { supabase } from "../supabase.js";
 import type { BotMessage, CommandResult } from "../types.js";
+import { monApiCall } from "../monitor.js";
+
+// Dedicated Claude client for fantasy team picking (needs higher token budget)
+const _fantasyClaude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+const SCORING_RULES = `
+DREAM11 FANTASY SCORING (T20):
+Batting: Run=1pt | 4=+1pt | 6=+2pt | 25runs=+4pt | 50=+8pt | 75=+12pt | 100=+16pt | Duck=-2pt
+SR bonus (min 10 balls): 100-120=+2pt | 120-140=+4pt | 140-160=+6pt | >160=+8pt
+Bowling: Wicket=+25pt | 2W bonus=+4pt | 3W=+8pt | 4W=+12pt | 5W=+16pt | Maiden=+4pt
+Economy (min 2 ov): <5=+4pt | 5-7=+2pt | 10+=−4pt
+Fielding: Catch=+8pt | 3+ catches bonus=+4pt | Stumping=+12pt | Run-out direct=+12pt indirect=+6pt
+Playing XI=+4pt | Captain = 2× all points | Vice-Captain = 1.5× all points
+TEAM RULES: Exactly 11 players | min 1 WK | min 3 BAT | min 3 BOWL | min 1 AR | max 7 from any single IPL team
+`;
 
 const FANTASY_BASE = process.env.FANTASY_APP_URL ?? "https://ipl11.vercel.app";
 const BOT_SECRET = process.env.FANTASY_BOT_SECRET ?? "";
@@ -31,16 +47,25 @@ const BOT_SECRET = process.env.FANTASY_BOT_SECRET ?? "";
 // ─── HTTP helper ─────────────────────────────────────────────────────────────
 
 async function botFetch(path: string, opts?: RequestInit): Promise<any> {
-  const res = await fetch(`${FANTASY_BASE}/api/bot${path}`, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${BOT_SECRET}`,
-      ...(opts?.headers ?? {}),
-    },
-  });
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return { error: text }; }
+  const t0 = Date.now();
+  let status = 0;
+  try {
+    const res = await fetch(`${FANTASY_BASE}/api/bot${path}`, {
+      ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${BOT_SECRET}`,
+        ...(opts?.headers ?? {}),
+      },
+    });
+    status = res.status;
+    const text = await res.text();
+    monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0 });
+    try { return JSON.parse(text); } catch { return { error: text }; }
+  } catch (e: any) {
+    monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0, error: e?.message });
+    throw e;
+  }
 }
 
 // ─── State helpers ───────────────────────────────────────────────────────────
@@ -115,6 +140,132 @@ async function getActiveState(groupId: string) {
   return future.sort(
     (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
   )[0] ?? null;
+}
+
+// ─── Bot team AI picker ──────────────────────────────────────────────────────
+
+async function pickTeamWithClaude(
+  players: any[],
+  matchInfo: string
+): Promise<{ playerIds: string[]; captainId: string; vcId: string; reasoning: string } | null> {
+  const playerList = players.map((p) => {
+    const s: string[] = [];
+    if (p.season_runs  > 0) s.push(`${p.season_runs}R avg${(p.season_avg ?? 0).toFixed(1)} SR${(p.season_sr ?? 0).toFixed(0)}`);
+    if (p.season_wickets > 0) s.push(`${p.season_wickets}W eco${(p.season_eco ?? 0).toFixed(2)}`);
+    if (p.recent_runs  > 0) s.push(`recent:${p.recent_runs}R`);
+    if (p.recent_wickets > 0) s.push(`recent:${p.recent_wickets}W`);
+    return `${p.id} | ${p.name} | ${p.role} | ${p.ipl_team} | ${s.join(" ") || "no stats"}`;
+  }).join("\n");
+
+  const prompt = `You are a Dream11 fantasy expert. Pick the optimal 11 for this IPL match to MAXIMISE expected fantasy points.
+
+Match: ${matchInfo}
+
+Players (ID | Name | Role | IPL Team | Stats):
+${playerList}
+
+${SCORING_RULES}
+Strategy: AR players score from both categories — highly value them. Pick C/VC with highest floor+ceiling (form + premium role). Avoid bench warmers — if XI confirmed, only pick confirmed players.
+
+Return ONLY this JSON (no extra text):
+{"playerIds":["id1","id2","id3","id4","id5","id6","id7","id8","id9","id10","id11"],"captainId":"id","vcId":"id","reasoning":"2-line Tanglish reason"}`;
+
+  try {
+    const resp = await _fantasyClaude.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 600,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const raw = resp.content[0].type === "text" ? resp.content[0].text : "";
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]);
+    if (!Array.isArray(parsed.playerIds) || parsed.playerIds.length !== 11) return null;
+    if (!parsed.captainId || !parsed.vcId) return null;
+    return parsed;
+  } catch (e) {
+    console.error("[fantasy] pickTeamWithClaude error:", e);
+    return null;
+  }
+}
+
+async function createAndJoinBotTeam(
+  matchId: string,
+  contestId: string,
+  matchInfo: string
+): Promise<string | null> {
+  const squadData = await botFetch(`/squad?match_id=${matchId}`);
+  if (!squadData?.players?.length) {
+    console.warn("[fantasy] No squad for bot team, match:", matchId);
+    return null;
+  }
+
+  const pick = await pickTeamWithClaude(squadData.players, matchInfo);
+  if (!pick) return null;
+
+  const res = await botFetch("/bot-team", {
+    method: "POST",
+    body: JSON.stringify({
+      match_id:   matchId,
+      contest_id: contestId,
+      team_name:  "machi",
+      player_ids: pick.playerIds,
+      captain_id: pick.captainId,
+      vc_id:      pick.vcId,
+    }),
+  });
+
+  if (res?.error) {
+    console.error("[fantasy] bot-team create failed:", res.error);
+    return null;
+  }
+
+  const cap = squadData.players.find((p: any) => p.id === pick.captainId);
+  const vc  = squadData.players.find((p: any) => p.id === pick.vcId);
+
+  return (
+    `🤖 *Machi joined da!* Claude analyzed ${squadData.players.length} players and locked in:\n` +
+    `👑 C: *${cap?.name ?? pick.captainId}*\n` +
+    `⭐ VC: *${vc?.name ?? pick.vcId}*\n` +
+    (pick.reasoning ? `_${pick.reasoning}_` : "")
+  );
+}
+
+async function updateBotTeam(
+  matchId: string,
+  matchInfo: string
+): Promise<string | null> {
+  // xi_only=true — squad endpoint filters to confirmed playing XI only
+  const squadData = await botFetch(`/squad?match_id=${matchId}&xi_only=true`);
+  if (!squadData?.players?.length) return null;
+
+  const pick = await pickTeamWithClaude(squadData.players, matchInfo);
+  if (!pick) return null;
+
+  const res = await botFetch("/bot-team", {
+    method: "PUT",
+    body: JSON.stringify({
+      match_id:   matchId,
+      player_ids: pick.playerIds,
+      captain_id: pick.captainId,
+      vc_id:      pick.vcId,
+    }),
+  });
+
+  if (res?.error) {
+    console.error("[fantasy] bot-team update failed:", res.error);
+    return null;
+  }
+
+  const cap = squadData.players.find((p: any) => p.id === pick.captainId);
+  const vc  = squadData.players.find((p: any) => p.id === pick.vcId);
+
+  return (
+    `🤖 *Machi team updated!* Playing XI confirm aayiruchu — Claude re-picked:\n` +
+    `👑 C: *${cap?.name ?? pick.captainId}*\n` +
+    `⭐ VC: *${vc?.name ?? pick.vcId}*\n` +
+    (pick.reasoning ? `_${pick.reasoning}_` : "")
+  );
 }
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -259,6 +410,20 @@ function buildPlayerStats(stats: any[], matchTeams: string): string {
   return msg;
 }
 
+// ─── enforce-deadlines (silent background job, every 5 min) ─────────────────
+
+export async function enforceDeadlines(): Promise<void> {
+  const cronSecret = process.env.FANTASY_CRON_SECRET ?? "abc";
+  try {
+    const base = process.env.FANTASY_APP_URL ?? "https://ipl11.vercel.app";
+    await fetch(`${base}/api/cron/enforce-deadlines`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${cronSecret}` },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch { /* silent */ }
+}
+
 // ─── Scheduled actions (called from scheduler.ts) ────────────────────────────
 
 /**
@@ -369,26 +534,6 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     const hasToss = !!xiData.match.toss_winner;
     if (!hasToss) continue;
 
-    // Auto-transition match to live so scoring cron picks it up.
-    // Step 1: lock (open → locked). Ignore error if already locked/live.
-    const lockRes = await botFetch("/lock", {
-      method: "POST",
-      body: JSON.stringify({ match_id: state.match_id }),
-    });
-    if (lockRes?.error) {
-      console.warn(`[fantasy] lock returned error for match ${state.match_id} (may already be locked/live):`, lockRes.error);
-      // Don't abort — match may already be locked, proceed to go_live and announce
-    }
-    // Step 2: go live (locked → live). Ignore error if already live.
-    const goLiveRes = await botFetch("/lock", {
-      method: "POST",
-      body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
-    });
-    if (goLiveRes?.error) {
-      console.warn(`[fantasy] go_live returned error for match ${state.match_id} (may already be live):`, goLiveRes.error);
-      // Don't abort — announce toss regardless of state transition errors
-    }
-
     await saveState(state.match_id, {
       toss_notified_at: new Date().toISOString(),
       locked_at: new Date().toISOString(),
@@ -404,7 +549,8 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
       if (machiRes?.ok && machiRes.message) machiLine = `\n\n${machiRes.message}`;
     } catch { /* non-fatal */ }
 
-    return buildTossAnnouncement(xiData.match, xiData.playing_xi) + machiLine;
+    return buildTossAnnouncement(xiData.match, xiData.playing_xi) + machiLine +
+      `\n\n⚠️ _Teams stay editable until the first ball is bowled!_`;
   }
 
   return null;
@@ -428,8 +574,7 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
-    .or("locked_at.not.is.null,toss_notified_at.not.is.null")
-    .lte("scheduled_at", now)   // match time has passed
+    .not("locked_at", "is", null)   // locked_at is set only after first ball
     .is("completed_at", null);
 
   if (!states?.length) return null;
@@ -579,36 +724,33 @@ export async function dailyContestCreate(groupId: string): Promise<string | null
       announced_at: new Date().toISOString(),
     });
 
-    announcements.push(await buildMatchAnnouncement(match, contestRes.contest));
+    const ann = await buildMatchAnnouncement(match, contestRes.contest);
+    const botJoin = await createAndJoinBotTeam(
+      match.id, contestRes.contest.id, `${match.team_home} vs ${match.team_away}`
+    );
+    announcements.push(botJoin ? `${ann}\n\n${botJoin}` : ann);
   }
 
   return announcements.length ? announcements.join("\n\n─────────────\n\n") : null;
 }
 
 /**
- * Lock teams and return a toss announcement message.
+ * Announce toss + playing XI. Does NOT lock or go-live.
+ * Teams remain editable until the first ball — syncLiveScores handles the transition.
  */
 async function lockAndAnnounce(matchId: string, xiData: any): Promise<string> {
-  const lockRes = await botFetch("/lock", {
-    method: "POST",
-    body: JSON.stringify({ match_id: matchId }),
-  });
-  if (lockRes?.error) {
-    console.error(`[fantasy] lock failed for ${matchId}:`, lockRes.error);
-  } else {
-    const goLiveRes = await botFetch("/lock", {
-      method: "POST",
-      body: JSON.stringify({ match_id: matchId, action: "go_live" }),
-    });
-    if (goLiveRes?.error) {
-      console.error(`[fantasy] go_live failed for ${matchId}:`, goLiveRes.error);
-    }
-  }
-  await saveState(matchId, {
-    toss_notified_at: new Date().toISOString(),
-    locked_at: new Date().toISOString(),
-  });
-  return buildTossAnnouncement(xiData.match, xiData.playing_xi);
+  // Only record that toss was notified — locked_at stays null until first ball
+  await saveState(matchId, { toss_notified_at: new Date().toISOString() });
+
+  const xiMsg = buildTossAnnouncement(xiData.match, xiData.playing_xi);
+  const botUpdate = await updateBotTeam(
+    matchId,
+    `${xiData.match.team_home} vs ${xiData.match.team_away}`
+  );
+
+  const editNote = `\n\n⚠️ _Teams stay editable until the first ball is bowled!_`;
+  const base = botUpdate ? `${xiMsg}\n\n${botUpdate}` : xiMsg;
+  return base + editNote;
 }
 
 /**
@@ -805,29 +947,93 @@ export async function morningWinnerAnnouncement(groupId: string): Promise<string
 }
 
 /**
- * Every 5 min — Sync live scores for all active matches.
- * Silent — no WhatsApp message. Just keeps the fantasy app data fresh.
+ * Every 5 min (3PM–11PM) — Two responsibilities:
+ *
+ * 1. LIVE matches (locked_at set): sync scores silently to keep fantasy points fresh.
+ *
+ * 2. PRE-LIVE matches (toss done, locked_at null): check if the first ball has been
+ *    bowled. When scoring data appears, atomically lock + go_live and notify the group.
+ *    This is the ONLY place that transitions a match to live status.
  */
-export async function syncLiveScores(groupId: string): Promise<void> {
-  if (!BOT_SECRET) return;
+export async function syncLiveScores(groupId: string): Promise<string | null> {
+  if (!BOT_SECRET) return null;
 
   const now = new Date().toISOString();
-  const { data: states } = await supabase
+
+  // ── 1. Sync already-live matches (silent) ──────────────────────────────────
+  const { data: liveStates } = await supabase
     .from("ba_fantasy_state")
     .select("match_id")
     .eq("group_id", groupId)
-    .or("locked_at.not.is.null,toss_notified_at.not.is.null")
-    .lte("scheduled_at", now)
+    .not("locked_at", "is", null)
     .is("completed_at", null);
 
-  if (!states?.length) return;
-
-  for (const state of states) {
+  for (const state of liveStates ?? []) {
     await botFetch("/sync", {
       method: "POST",
       body: JSON.stringify({ match_id: state.match_id }),
     }).catch((e: any) => console.error(`[fantasy] sync error for ${state.match_id}:`, e));
   }
+
+  // ── 2. Pre-live matches: detect first ball ─────────────────────────────────
+  // Toss has been announced but match hasn't started yet (locked_at is null).
+  // Only check matches whose scheduled_at has passed.
+  const { data: preLiveStates } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .not("toss_notified_at", "is", null)
+    .is("locked_at", null)
+    .is("completed_at", null)
+    .lte("scheduled_at", now);
+
+  for (const state of preLiveStates ?? []) {
+    // Sync first so the fantasy app has latest Cricbuzz data
+    await botFetch("/sync", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id }),
+    }).catch(() => {});
+
+    // Check if scoring has actually started
+    const summary = await botFetch(`/match-summary?match_id=${state.match_id}`);
+    if (!summary?.match) continue;
+
+    const ls = summary.match.live_score;
+
+    // "First ball bowled" signals:
+    //   - Any overs ticked over (first legal delivery)
+    //   - Any runs scored (including wides/no-balls)
+    //   - Any wicket
+    const scoringStarted =
+      summary.match.status === "live" ||
+      (ls?.team1_overs && ls.team1_overs !== "0.0") ||
+      (ls?.team1_runs  ?? 0) > 0 ||
+      (ls?.team1_wickets ?? 0) > 0;
+
+    if (!scoringStarted) continue;
+
+    // First ball confirmed — lock + go_live in one shot
+    await botFetch("/lock", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id }),
+    }).catch(() => {});
+    await botFetch("/lock", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
+    }).catch(() => {});
+
+    await saveState(state.match_id, { locked_at: new Date().toISOString() });
+
+    console.log(`[fantasy] Match ${state.match_id} went live — first ball detected`);
+
+    return (
+      `🏏 *MATCH STARTED!* ${state.team_home} vs ${state.team_away}\n\n` +
+      `⚡ First ball bowled — teams are now locked!\n` +
+      `Scoring is live. Use *!fantasy lb* for leaderboard updates 🔥`
+    );
+  }
+
+  return null;
 }
 
 // ─── Team diff formatter ─────────────────────────────────────────────────────
@@ -981,11 +1187,11 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
   if (lb?.error) return "Leaderboard fetch panna mudiyala. Try again!";
   if (!lb?.leaderboard?.length) return "Innum yaarum join pannala da 😅 Join pannu: !fantasy join";
 
-  const contestStatus = lb.contest_status ?? "open";
+  // match_status is authoritative — contests stay "locked" even during live matches
+  const matchStatus = lb.match_status ?? lb.contest_status ?? "open";
 
   // If match is live but all scores are 0, the sync hasn't populated yet.
-  // Show a helpful message instead of a misleading all-zero leaderboard.
-  if (contestStatus === "live") {
+  if (matchStatus === "live") {
     const allZero = (lb.leaderboard as any[]).every((e: any) => (e.points ?? 0) === 0);
     if (allZero) {
       return `🏆 *FANTASY LEADERBOARD*\n_${state.team_home} vs ${state.team_away}_\n\n⏳ Scores still syncing da — 2 nimisham wait panni !fl again try pannu! Cricket points API update aaguthu 🏏`;
@@ -995,7 +1201,7 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
   return buildLeaderboard(
     lb.leaderboard,
     `${state.team_home} vs ${state.team_away}`,
-    contestStatus
+    matchStatus
   );
 }
 
@@ -1142,7 +1348,11 @@ async function handleAnnounce(msg: BotMessage): Promise<string> {
     announced_at: new Date().toISOString(),
   });
 
-  return await buildMatchAnnouncement(match, contest);
+  const ann = await buildMatchAnnouncement(match, contest);
+  const botJoin = contest?.id
+    ? await createAndJoinBotTeam(match.id, contest.id, `${match.team_home} vs ${match.team_away}`)
+    : null;
+  return botJoin ? `${ann}\n\n${botJoin}` : ann;
 }
 
 async function handleSyncXI(msg: BotMessage): Promise<string> {
@@ -1158,7 +1368,16 @@ async function handleSyncXI(msg: BotMessage): Promise<string> {
   });
 
   if (res?.error) return `Sync failed: ${res.error}`;
-  return "Playing XI synced from Cricbuzz! Use !fantasy xi to see.";
+
+  // Show the XI list
+  const xiData = await botFetch(`/playing-xi?match_id=${state.match_id}`);
+  const xiMsg = xiData?.playing_xi ? buildTossAnnouncement(xiData.match, xiData.playing_xi) : "Playing XI synced! Use !fantasy xi to see.";
+
+  // Re-pick bot team now that XI is confirmed
+  const matchInfo = state.team_home && state.team_away ? `${state.team_home} vs ${state.team_away}` : state.match_id;
+  const botUpdate = await updateBotTeam(state.match_id, matchInfo);
+
+  return botUpdate ? `${xiMsg}\n\n${botUpdate}` : xiMsg;
 }
 
 async function handleContest(msg: BotMessage): Promise<string> {

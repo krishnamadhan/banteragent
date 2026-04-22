@@ -1,6 +1,7 @@
 import http from "http";
 import { execFile } from "child_process";
 import { getClient } from "./index.js";
+import { runTask } from "./task-runner.js";
 
 const PORT = 3099;
 
@@ -30,6 +31,23 @@ export function startInternalServer() {
       } catch (e) {
         res.writeHead(500).end("error");
       }
+      return;
+    }
+
+    // POST /run-task — called by pi-scheduler to execute a named task
+    // Body: { task: string }
+    if (req.method === "POST" && req.url === "/run-task") {
+      const body = await readBody(req);
+      let task = "";
+      try { task = JSON.parse(body).task ?? ""; } catch { /* ignore */ }
+      if (!task) { res.writeHead(400).end(JSON.stringify({ ok: false, error: "task required" })); return; }
+
+      const gid = groupId ?? "";
+      if (!gid) { res.writeHead(503).end(JSON.stringify({ ok: false, error: "BOT_GROUP_ID not set" })); return; }
+
+      // Respond immediately — task runs async so pi-scheduler isn't blocked
+      res.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, task }));
+      runTask(task, gid).catch((e) => console.error(`[run-task] ${task} uncaught:`, e));
       return;
     }
 

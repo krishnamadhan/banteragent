@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { devlog, startDevServer } from "./devlog.js";
+import { monClaude } from "./monitor.js";
 
 // Start dev dashboard if DEV_LOG env var is set
 if (process.env.DEV_LOG === "1") startDevServer();
@@ -220,11 +221,18 @@ export async function getChatResponse(
       sender: senderName,
       mode,
       systemPrompt,
-      history: [...history.slice(0, -1)], // history before this response
+      history: [...history.slice(0, -1)],
       response: result,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
       durationMs: Date.now() - t0,
+    });
+    monClaude({
+      type: "chat",
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
     });
 
     return result;
@@ -248,6 +256,7 @@ export async function generateStructured(prompt: string): Promise<string> {
       ? response.content[0].text
       : "Content generate panna mudiyala machaan.";
     devlog({ type: "structured", prompt, response: text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, durationMs: Date.now() - t0 });
+    monClaude({ type: "structured", input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens, cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0, dur_ms: Date.now() - t0 });
     return text;
   } catch (error) {
     devlog({ type: "structured", prompt, error: String(error), durationMs: Date.now() - t0 });
@@ -269,6 +278,7 @@ export async function generateContent(prompt: string): Promise<string> {
       ? truncateForWhatsApp(response.content[0].text)
       : "Content generate panna mudiyala machaan.";
     devlog({ type: "content", prompt, response: text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, durationMs: Date.now() - t0 });
+    monClaude({ type: "content", input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens, cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0, dur_ms: Date.now() - t0 });
     return text;
   } catch (error) {
     devlog({ type: "content", prompt, error: String(error), durationMs: Date.now() - t0 });
