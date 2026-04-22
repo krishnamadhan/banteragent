@@ -80,9 +80,12 @@ async function getState(matchId: string) {
 }
 
 async function saveState(matchId: string, update: Record<string, unknown>) {
-  const { error } = await supabase
-    .from("ba_fantasy_state")
-    .upsert({ match_id: matchId, ...update }, { onConflict: "match_id" });
+  // Use upsert only when group_id is present (initial row creation).
+  // Without group_id, use update-only to avoid NOT NULL insert failure.
+  const query = "group_id" in update
+    ? supabase.from("ba_fantasy_state").upsert({ match_id: matchId, ...update }, { onConflict: "match_id" })
+    : supabase.from("ba_fantasy_state").update(update).eq("match_id", matchId);
+  const { error } = await query;
   if (error) throw new Error(`saveState failed for ${matchId}: ${error.message}`);
 }
 
