@@ -196,60 +196,21 @@ Return ONLY this JSON (no extra text):
 async function createAndJoinBotTeam(
   matchId: string,
   contestId: string,
-  matchInfo: string
+  _matchInfo: string
 ): Promise<string | null> {
-  let squadData = await botFetch(`/squad?match_id=${matchId}`);
-  if (!squadData?.players?.length) {
-    // Trigger squad sync and retry with backoff
-    console.warn("[fantasy] Squad empty, triggering sync for match:", matchId);
-    await fetch(`${FANTASY_BASE}/api/cron/sync-squads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${BOT_SECRET}` },
-    }).catch((e: any) => console.warn("[fantasy] sync-squads trigger failed:", e?.message));
-    await new Promise((r) => setTimeout(r, 15000));
-    squadData = await botFetch(`/squad?match_id=${matchId}`);
-    if (!squadData?.players?.length) {
-      // Second retry after another 15s
-      await new Promise((r) => setTimeout(r, 15000));
-      squadData = await botFetch(`/squad?match_id=${matchId}`);
-    }
-  }
-  if (!squadData?.players?.length) {
-    console.warn("[fantasy] No squad for bot team after sync, match:", matchId);
-    return null;
-  }
-
-  const pick = await pickTeamWithClaude(squadData.players, matchInfo);
-  if (!pick) return null;
-
-  const res = await botFetch("/bot-team", {
+  // Delegate entirely to /api/bot/machi-team which handles squad fetching + Claude picking
+  const res = await botFetch("/machi-team", {
     method: "POST",
-    body: JSON.stringify({
-      match_id:   matchId,
-      contest_id: contestId,
-      team_name:  "machi",
-      player_ids: pick.playerIds,
-      captain_id: pick.captainId,
-      vc_id:      pick.vcId,
-    }),
+    body: JSON.stringify({ match_id: matchId, contest_id: contestId }),
   });
 
   if (res?.error) {
-    console.error("[fantasy] bot-team create failed:", res.error);
+    console.error("[fantasy] machi-team failed:", res.error);
     return null;
   }
 
-  const cap = squadData.players.find((p: any) => p.id === pick.captainId);
-  const vc  = squadData.players.find((p: any) => p.id === pick.vcId);
-
-  return (
-    `🤖 *Machi joined da!* Claude analyzed ${squadData.players.length} players and locked in:\n` +
-    `👑 C: *${cap?.name ?? pick.captainId}*\n` +
-    `⭐ VC: *${vc?.name ?? pick.vcId}*\n` +
-    (pick.reasoning ? `_${pick.reasoning}_` : "")
-  );
+  return res?.message ?? null;
 }
-
 async function updateBotTeam(
   matchId: string,
   matchInfo: string
