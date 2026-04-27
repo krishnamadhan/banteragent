@@ -23,6 +23,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { checkAndResolveSolliAdi, getSolliAdiMatchLeaderboard } from "./solli-adi.js";
 import { supabase } from "../supabase.js";
 import type { BotMessage, CommandResult } from "../types.js";
 import { monApiCall } from "../monitor.js";
@@ -70,23 +71,23 @@ async function botFetch(path: string, opts?: RequestInit): Promise<any> {
 
 // ─── State helpers ───────────────────────────────────────────────────────────
 
-async function getState(matchId: string) {
+async function getState(matchId: string, groupId: string) {
   const { data } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("match_id", matchId)
+    .eq("group_id", groupId)
     .maybeSingle();
   return data;
 }
 
-async function saveState(matchId: string, update: Record<string, unknown>) {
-  // Use upsert only when group_id is present (initial row creation).
-  // Without group_id, use update-only to avoid NOT NULL insert failure.
-  const query = "group_id" in update
-    ? supabase.from("ba_fantasy_state").upsert({ match_id: matchId, ...update }, { onConflict: "match_id" })
-    : supabase.from("ba_fantasy_state").update(update).eq("match_id", matchId);
+async function saveState(matchId: string, groupId: string, update: Record<string, unknown>) {
+  // Always upsert scoped to (match_id, group_id) — composite PK from migration_009.
+  const query = supabase
+    .from("ba_fantasy_state")
+    .upsert({ match_id: matchId, group_id: groupId, ...update }, { onConflict: "match_id,group_id" });
   const { error } = await query;
-  if (error) throw new Error(`saveState failed for ${matchId}: ${error.message}`);
+  if (error) throw new Error(`saveState failed for ${matchId}:${groupId}: ${error.message}`);
 }
 
 /**
@@ -197,9 +198,24 @@ async function createAndJoinBotTeam(
   contestId: string,
   matchInfo: string
 ): Promise<string | null> {
-  const squadData = await botFetch(`/squad?match_id=${matchId}`);
+  let squadData = await botFetch(`/squad?match_id=${matchId}`);
   if (!squadData?.players?.length) {
-    console.warn("[fantasy] No squad for bot team, match:", matchId);
+    // Trigger squad sync and retry with backoff
+    console.warn("[fantasy] Squad empty, triggering sync for match:", matchId);
+    await fetch(`${FANTASY_BASE}/api/cron/sync-squads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${BOT_SECRET}` },
+    }).catch((e: any) => console.warn("[fantasy] sync-squads trigger failed:", e?.message));
+    await new Promise((r) => setTimeout(r, 15000));
+    squadData = await botFetch(`/squad?match_id=${matchId}`);
+    if (!squadData?.players?.length) {
+      // Second retry after another 15s
+      await new Promise((r) => setTimeout(r, 15000));
+      squadData = await botFetch(`/squad?match_id=${matchId}`);
+    }
+  }
+  if (!squadData?.players?.length) {
+    console.warn("[fantasy] No squad for bot team after sync, match:", matchId);
     return null;
   }
 
@@ -245,7 +261,7 @@ async function updateBotTeam(
   const pick = await pickTeamWithClaude(squadData.players, matchInfo);
   if (!pick) return null;
 
-  const res = await botFetch("/bot-team", {
+  let res = await botFetch("/bot-team", {
     method: "PUT",
     body: JSON.stringify({
       match_id:   matchId,
@@ -255,9 +271,34 @@ async function updateBotTeam(
     }),
   });
 
+  // If no team exists yet (creation failed earlier), create it now using saved contest_id
   if (res?.error) {
-    console.error("[fantasy] bot-team update failed:", res.error);
-    return null;
+    // Look up contest_id from any group that has state for this match
+    const { data: anyState } = await supabase
+      .from("ba_fantasy_state")
+      .select("contest_id")
+      .eq("match_id", matchId)
+      .not("contest_id", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (anyState?.contest_id) {
+      console.warn("[fantasy] bot-team PUT failed, trying POST (first-time create):", res.error);
+      res = await botFetch("/bot-team", {
+        method: "POST",
+        body: JSON.stringify({
+          match_id:   matchId,
+          contest_id: anyState.contest_id,
+          team_name:  "machi",
+          player_ids: pick.playerIds,
+          captain_id: pick.captainId,
+          vc_id:      pick.vcId,
+        }),
+      });
+    }
+    if (res?.error) {
+      console.error("[fantasy] bot-team update/create failed:", res.error);
+      return null;
+    }
   }
 
   const cap = squadData.players.find((p: any) => p.id === pick.captainId);
@@ -368,24 +409,39 @@ export function buildTossAnnouncement(match: any, xi: any): string {
   return msg;
 }
 
-function buildLeaderboard(leaderboard: any[], matchInfo: string, status: string): string {
+function buildLeaderboard(leaderboard: any[], matchInfo: string, status: string, bonusMap?: Map<string, number>): string {
   if (!leaderboard.length) return "Leaderboard empty da — koi join pannala still 😅";
 
   const medals = ["🥇", "🥈", "🥉"];
-  let msg = `🏆 *FANTASY LEADERBOARD*\n_${matchInfo}_\n\n`;
+  const hasBonus = bonusMap && bonusMap.size > 0;
+  let msg = `🏆 *FANTASY LEADERBOARD*${hasBonus ? " (+ Solli Adi 📻)" : ""}\n_${matchInfo}_\n\n`;
 
-  leaderboard.forEach((e, i) => {
+  // Re-sort if bonus included
+  let sorted = [...leaderboard];
+  if (hasBonus) {
+    sorted = sorted.map((e) => ({
+      ...e,
+      total: (e.points ?? 0) + (bonusMap?.get(e.display_name) ?? 0),
+    })).sort((a, b) => b.total - a.total);
+  }
+
+  sorted.forEach((e, i) => {
     const medal = medals[i] ?? `${i + 1}.`;
-    msg += `${medal} *${e.display_name}* — ${e.points} pts\n`;
+    const pts = e.points ?? 0;
+    const bonus = bonusMap?.get(e.display_name) ?? 0;
+    const bonusBit = bonus > 0 ? ` (+${bonus}🎙️)` : "";
+    msg += `${medal} *${e.display_name}* — ${pts} pts${bonusBit}\n`;
     if (e.team_name) msg += `   _${e.team_name}_\n`;
   });
 
+  if (hasBonus) msg += `\n_🎙️ = Solli Adi bonus_\n`;
+
   if (status === "live") {
-    msg += `\n_Live points — updates every 30 min!_`;
+    msg += `\n_Live — updates every 30 min!_`;
   } else if (status === "completed") {
     msg += `\n_Final standings!_`;
   } else if (status === "locked") {
-    msg += `\n_Match starting soon — points will update once live!_`;
+    msg += `\n_Match starting soon…_`;
   } else {
     msg += `\n_Join panna ippo time irukku!_`;
   }
@@ -456,7 +512,7 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
     if (msUntil < -4 * 60 * 60 * 1000) continue;
 
     // Check if already announced
-    const state = await getState(match.id);
+    const state = await getState(match.id, groupId);
     if (state?.announced_at) continue; // already done
 
     // Create group contest (idempotent — returns existing if already in DB)
@@ -475,8 +531,7 @@ export async function checkAndAnnounceMatches(groupId: string): Promise<string |
     }
 
     // Only mark announced once we have a real contest
-    await saveState(match.id, {
-      group_id: groupId,
+    await saveState(match.id, groupId, {
       contest_id: contest.id,
       invite_code: contest.invite_code ?? null,
       team_home: match.team_home,
@@ -537,7 +592,7 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     const hasToss = !!xiData.match.toss_winner;
     if (!hasToss) continue;
 
-    await saveState(state.match_id, {
+    await saveState(state.match_id, groupId, {
       toss_notified_at: new Date().toISOString(),
       locked_at: new Date().toISOString(),
     });
@@ -592,7 +647,7 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
   // Match is done — send final results then mark completed
   if (match.status === "completed" || match.status === "in_review") {
     const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
-    await saveState(state.match_id, { completed_at: new Date().toISOString() });
+    await saveState(state.match_id, groupId, { completed_at: new Date().toISOString() });
 
     let msg = `🏁 *MATCH OVER!* ${state.team_home} vs ${state.team_away}\n\n`;
     if (match.result_summary) msg += `📢 ${match.result_summary}\n\n`;
@@ -686,12 +741,18 @@ export async function dailyScheduleSync(groupId: string): Promise<string | null>
 
 /**
  * 11:00 AM — Create contests for today's matches and post announcements.
+ * allGroupIds: all groups that should receive the announcement (passed from task-runner).
+ * Returns a map of groupId → announcement string so task-runner can send to each group.
  */
-export async function dailyContestCreate(groupId: string): Promise<string | null> {
-  if (!BOT_SECRET) return null;
+export async function dailyContestCreate(
+  primaryGroupId: string,
+  allGroupIds: string[] = [primaryGroupId],
+): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  if (!BOT_SECRET) return results;
 
   const data = await botFetch("/upcoming");
-  if (!data?.matches?.length) return null;
+  if (!data?.matches?.length) return results;
 
   const todayIST = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
   const todayMatches = (data.matches as any[]).filter((m) => {
@@ -699,13 +760,12 @@ export async function dailyContestCreate(groupId: string): Promise<string | null
     return matchDateIST === todayIST && ["scheduled", "open"].includes(m.status);
   });
 
-  if (!todayMatches.length) return null;
-
-  const announcements: string[] = [];
+  if (!todayMatches.length) return results;
 
   for (const match of todayMatches) {
-    const state = await getState(match.id);
-    if (state?.announced_at) continue;
+    // Check if already announced for the primary group (the one that runs admin tasks)
+    const primaryState = await getState(match.id, primaryGroupId);
+    if (primaryState?.announced_at) continue;
 
     const contestRes = await botFetch("/contest", {
       method: "POST",
@@ -717,33 +777,42 @@ export async function dailyContestCreate(groupId: string): Promise<string | null
       continue;
     }
 
-    await saveState(match.id, {
-      group_id: groupId,
-      contest_id: contestRes.contest.id,
-      invite_code: contestRes.contest.invite_code ?? null,
-      team_home: match.team_home,
-      team_away: match.team_away,
+    const statePayload = {
+      contest_id:   contestRes.contest.id,
+      invite_code:  contestRes.contest.invite_code ?? null,
+      team_home:    match.team_home,
+      team_away:    match.team_away,
       scheduled_at: match.scheduled_at,
       announced_at: new Date().toISOString(),
-    });
+    };
+
+    // Save state for EVERY group so each can independently track toss/live/completed
+    for (const gid of allGroupIds) {
+      await saveState(match.id, gid, statePayload);
+    }
 
     const ann = await buildMatchAnnouncement(match, contestRes.contest);
     const botJoin = await createAndJoinBotTeam(
       match.id, contestRes.contest.id, `${match.team_home} vs ${match.team_away}`
     );
-    announcements.push(botJoin ? `${ann}\n\n${botJoin}` : ann);
+    const fullAnn = botJoin ? `${ann}\n\n${botJoin}` : ann;
+
+    for (const gid of allGroupIds) {
+      const existing = results.get(gid);
+      results.set(gid, existing ? `${existing}\n\n─────────────\n\n${fullAnn}` : fullAnn);
+    }
   }
 
-  return announcements.length ? announcements.join("\n\n─────────────\n\n") : null;
+  return results;
 }
 
 /**
  * Announce toss + playing XI. Does NOT lock or go-live.
  * Teams remain editable until the first ball — syncLiveScores handles the transition.
  */
-async function lockAndAnnounce(matchId: string, xiData: any): Promise<string> {
+async function lockAndAnnounce(matchId: string, groupId: string, xiData: any): Promise<string> {
   // Only record that toss was notified — locked_at stays null until first ball
-  await saveState(matchId, { toss_notified_at: new Date().toISOString() });
+  await saveState(matchId, groupId, { toss_notified_at: new Date().toISOString() });
 
   const xiMsg = buildTossAnnouncement(xiData.match, xiData.playing_xi);
   const botUpdate = await updateBotTeam(
@@ -814,7 +883,7 @@ export async function preMatchCheck(
 
   if (xiData?.match?.toss_winner) {
     // Toss already done — lock and announce immediately
-    return await lockAndAnnounce(slotMatch.match_id, xiData);
+    return await lockAndAnnounce(slotMatch.match_id, groupId, xiData);
   }
 
   // Toss not done — send reminder and start 15-min polling
@@ -846,7 +915,7 @@ export async function preMatchCheck(
 
     const fresh = await botFetch(`/playing-xi?match_id=${slotMatch.match_id}`);
     if (fresh?.match?.toss_winner) {
-      const msg = await lockAndAnnounce(slotMatch.match_id, fresh);
+      const msg = await lockAndAnnounce(slotMatch.match_id, groupId, fresh);
       await sendFn(groupId, msg);
     } else if (pollsLeft > 0) {
       setTimeout(poll, 15 * 60 * 1000);
@@ -919,7 +988,7 @@ export async function morningWinnerAnnouncement(groupId: string): Promise<string
     // Use a timestamp within yesterday's window (not now) so tomorrow's morning
     // recap won't re-pick this match in its "completedYesterday" query.
     if (!state.completed_at) {
-      await saveState(state.match_id, { completed_at: new Date(yesterdayEndUTC.getTime() - 1).toISOString() });
+      await saveState(state.match_id, groupId, { completed_at: new Date(yesterdayEndUTC.getTime() - 1).toISOString() });
     }
 
     const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
@@ -978,6 +1047,27 @@ export async function syncLiveScores(groupId: string): Promise<string | null> {
     }).catch((e: any) => console.error(`[fantasy] sync error for ${state.match_id}:`, e));
   }
 
+  // ── 1b. Check Solli Adi over-prediction resolutions ───────────────────────
+  const solliMessages: string[] = [];
+  for (const state of liveStates ?? []) {
+    try {
+      const summary = await botFetch(`/match-summary?match_id=${state.match_id}`);
+      const ls = summary?.match?.live_score;
+      if (!ls?.current_batting) continue;
+      const batting = ls.current_batting as string;
+      const isTeam1 = ls.team1 === batting;
+      const runs = isTeam1 ? (ls.team1_runs ?? 0) : (ls.team2_runs ?? 0);
+      const oversStr = isTeam1 ? (ls.team1_overs ?? "0") : (ls.team2_overs ?? "0");
+      const completedOvers = parseInt(String(oversStr).split(".")[0] ?? "0");
+      const matchStatus = summary?.match?.status ?? "live";
+      const msgs = await checkAndResolveSolliAdi(state.match_id, groupId, runs, completedOvers, matchStatus);
+      solliMessages.push(...msgs);
+    } catch (e: any) {
+      console.error(`[fantasy] solli-adi check error for ${state.match_id}:`, e?.message);
+    }
+  }
+  if (solliMessages.length > 0) return solliMessages.join("\n\n");
+
   // ── 2. Pre-live matches: detect first ball ─────────────────────────────────
   // Toss has been announced but match hasn't started yet (locked_at is null).
   // Only check matches whose scheduled_at has passed.
@@ -1025,7 +1115,7 @@ export async function syncLiveScores(groupId: string): Promise<string | null> {
       body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
     }).catch(() => {});
 
-    await saveState(state.match_id, { locked_at: new Date().toISOString() });
+    await saveState(state.match_id, groupId, { locked_at: new Date().toISOString() });
 
     console.log(`[fantasy] Match ${state.match_id} went live — first ball detected`);
 
@@ -1201,10 +1291,36 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
     }
   }
 
+  // Merge Solli Adi bonus into leaderboard
+  let bonusMap: Map<string, number> | undefined;
+  try {
+    const { data: rounds } = await supabase
+      .from("ba_solli_adi")
+      .select("id")
+      .eq("match_id", state.match_id)
+      .eq("group_id", msg.groupId)
+      .eq("status", "resolved");
+    if (rounds?.length) {
+      const roundIds = rounds.map((r: any) => r.id);
+      const { data: bonusPreds } = await supabase
+        .from("ba_solli_adi_prediction")
+        .select("user_name, points_awarded")
+        .in("round_id", roundIds)
+        .gt("points_awarded", 0);
+      if (bonusPreds?.length) {
+        bonusMap = new Map<string, number>();
+        for (const p of bonusPreds) {
+          bonusMap.set(p.user_name, (bonusMap.get(p.user_name) ?? 0) + (p.points_awarded ?? 0));
+        }
+      }
+    }
+  } catch {/* non-fatal */}
+
   return buildLeaderboard(
     lb.leaderboard,
     `${state.team_home} vs ${state.team_away}`,
-    matchStatus
+    matchStatus,
+    bonusMap,
   );
 }
 
@@ -1286,7 +1402,7 @@ async function handleLock(msg: BotMessage): Promise<string> {
   if (res?.error) return `Lock failed: ${res.error}`;
   if (res?.already) return `Already ${res.status} da!`;
 
-  await saveState(state.match_id, { locked_at: new Date().toISOString() });
+  await saveState(state.match_id, msg.groupId, { locked_at: new Date().toISOString() });
 
   return (
     `🔒 *Contest LOCKED!*\n\n` +
@@ -1341,8 +1457,7 @@ async function handleAnnounce(msg: BotMessage): Promise<string> {
 
   const contest = contestData?.contest;
 
-  await saveState(match.id, {
-    group_id: msg.groupId,
+  await saveState(match.id, msg.groupId, {
     contest_id: contest?.id ?? null,
     invite_code: contest?.invite_code ?? null,
     team_home: match.team_home,
@@ -1398,7 +1513,7 @@ async function handleContest(msg: BotMessage): Promise<string> {
 
   for (const match of openMatches) {
     // Skip if already announced for this group
-    const state = await getState(match.id);
+    const state = await getState(match.id, msg.groupId);
     if (state?.announced_at) {
       const code = state.invite_code;
       lines.push(
@@ -1420,8 +1535,7 @@ async function handleContest(msg: BotMessage): Promise<string> {
       continue;
     }
 
-    await saveState(match.id, {
-      group_id: msg.groupId,
+    await saveState(match.id, msg.groupId, {
       contest_id: contest.id,
       invite_code: contest.invite_code ?? null,
       team_home: match.team_home,

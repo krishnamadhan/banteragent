@@ -71,9 +71,11 @@ export async function handleMessage(client: any, rawMsg: any) {
     quotedMessageId: rawMsg.hasQuotedMsg ? (await rawMsg.getQuotedMessage())?.id?._serialized : undefined,
   };
 
-  // Only respond in the configured group
+  // Only respond in the configured groups (main + IPL group 2)
   const targetGroup = process.env.BOT_GROUP_ID;
-  if (isGroup && targetGroup && targetGroup !== "120363xxxx@g.us" && msg.groupId !== targetGroup) return;
+  const targetGroup2 = process.env.BOT_GROUP2_ID;
+  const allowedGroups = [targetGroup, targetGroup2].filter(Boolean) as string[];
+  if (isGroup && allowedGroups.length > 0 && allowedGroups[0] !== "120363xxxx@g.us" && !allowedGroups.includes(msg.groupId)) return;
 
   // Only respond to DMs from the bot owner — block all other DMs (prevents Dominos/promo loops)
   const ownerPhone = process.env.BOT_OWNER_PHONE;
@@ -156,7 +158,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     }
 
     msg.text = cleanText;
-    const { response, mentions } = await routeMessage(msg, recentMessages);
+    const { response, mentions, additionalMessages } = await routeMessage(msg, recentMessages);
 
     // Append zodiac question if this person's profile is empty (max once per week)
     let fullResponse = response;
@@ -169,6 +171,14 @@ export async function handleMessage(client: any, rawMsg: any) {
     if (!fullResponse.trim()) return;
 
     await sendReply(client, rawMsg, fullResponse, mentions);
+
+    // Send any additional chained messages (e.g. multi-part welcome sequence)
+    if (additionalMessages?.length) {
+      for (const m of additionalMessages) {
+        if (m.delayMs) await new Promise(r => setTimeout(r, m.delayMs));
+        await sendMessage(isGroup ? msg.groupId : msg.from, m.text);
+      }
+    }
 
     // Track bot's own response so it has context when users follow up
     if (isGroup) {
@@ -280,8 +290,8 @@ async function sendReply(client: any, rawMsg: any, text: string, mentions?: stri
 export async function sendMessage(jid: string, text: string) {
   const { getClient } = await import("./index.js");
   const client = getClient();
-  if (!client) {
-    console.error("Client not connected, cannot send message");
+  if (!client || !client.info) {
+    console.error("Client not ready, cannot send message");
     return;
   }
   try {
@@ -299,8 +309,8 @@ export async function sendMessage(jid: string, text: string) {
 export async function sendMentionMessage(jid: string, text: string, phones: string[]) {
   const { getClient } = await import("./index.js");
   const client = getClient();
-  if (!client) {
-    console.error("Client not connected, cannot send mention message");
+  if (!client || !client.info) {
+    console.error("Client not ready, cannot send mention message");
     return;
   }
   try {
