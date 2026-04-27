@@ -1261,7 +1261,29 @@ async function handleJoin(msg: BotMessage): Promise<string> {
 async function handleLeaderboard(msg: BotMessage): Promise<string> {
   const state = await getActiveState(msg.groupId);
 
-  if (!state) return "Active contest illai da! Match announce aagum pothu solluven.";
+  if (!state) {
+    // No announced contest — fall back to next upcoming match
+    const data = await botFetch("/upcoming");
+    const next = data?.matches?.find((m: any) =>
+      ["scheduled", "open"].includes(m.status) &&
+      new Date(m.scheduled_at).getTime() > Date.now()
+    );
+    if (!next) return "Active contest illai da! Match announce aagum pothu solluven.";
+
+    const lb = await botFetch(`/leaderboard?match_id=${next.id}&limit=10`);
+    if (!lb?.leaderboard?.length) {
+      return (
+        `📅 *UPCOMING: ${next.team_home} vs ${next.team_away}*\n` +
+        `⏰ ${formatIST(next.scheduled_at)} (${timeUntil(next.scheduled_at)} left)\n\n` +
+        `Innum yaarum join pannala da 😅 Join pannu: *!fantasy join*`
+      );
+    }
+    return buildLeaderboard(
+      lb.leaderboard,
+      `${next.team_home} vs ${next.team_away} (upcoming — ${timeUntil(next.scheduled_at)})`,
+      "open",
+    );
+  }
 
   // Trigger live score sync before showing results — ensures fresh data.
   // 12s cap: Cricbuzz fetch + upsert + leaderboard update can take 6-8s.
