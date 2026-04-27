@@ -42,12 +42,16 @@ export function startInternalServer() {
       try { task = JSON.parse(body).task ?? ""; } catch { /* ignore */ }
       if (!task) { res.writeHead(400).end(JSON.stringify({ ok: false, error: "task required" })); return; }
 
-      const gid = groupId ?? "";
-      if (!gid) { res.writeHead(503).end(JSON.stringify({ ok: false, error: "BOT_GROUP_ID not set" })); return; }
+      // Dispatch to all configured groups, skipping groups that have this task disabled
+      const { getAllGroupIds, getGroupConfig } = await import("./group-config.js");
+      const allGroups = getAllGroupIds();
+      if (!allGroups.length) { res.writeHead(503).end(JSON.stringify({ ok: false, error: "No groups configured" })); return; }
 
-      // Respond immediately — task runs async so pi-scheduler isn't blocked
-      res.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, task }));
-      runTask(task, gid).catch((e) => console.error(`[run-task] ${task} uncaught:`, e));
+      const targets = allGroups.filter(gid => !getGroupConfig(gid).disabledTasks.has(task));
+      res.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, task, targets: targets.length }));
+      for (const gid of targets) {
+        runTask(task, gid).catch((e) => console.error(`[run-task] ${task}:${gid} uncaught:`, e));
+      }
       return;
     }
 

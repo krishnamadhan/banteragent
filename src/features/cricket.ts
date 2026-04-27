@@ -117,20 +117,17 @@ Don't just repeat the score — add your funny Tanglish reaction to it. Be drama
   return await generateContent(prompt);
 }
 
-// Rate-limit commentary — max 1 Claude call per 20 minutes per group
-const lastCommentaryAt = new Map<string, number>();
-
 // ===== Check for score updates (called by cron) =====
 export async function checkCricketUpdates(groupId: string): Promise<
   Array<{ groupId: string; message: string }>
 > {
   // Guard: only poll during IPL match windows (3:30 PM – 11:00 PM IST)
-  const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-  const istMin  = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCMinutes();
+  const istNow = Date.now() + 5.5 * 60 * 60 * 1000;
+  const istHour = new Date(istNow).getUTCHours();
+  const istMin  = new Date(istNow).getUTCMinutes();
   const istTotalMins = istHour * 60 + istMin;
   if (istTotalMins < 15 * 60 + 30 || istTotalMins >= 23 * 60) return [];
 
-  // Check if alerts are enabled for this group
   const { data: settings } = await supabase
     .from("ba_group_settings")
     .select("cricket_alerts")
@@ -142,7 +139,6 @@ export async function checkCricketUpdates(groupId: string): Promise<
   const matches = await fetchLiveScores();
   if (!matches.length) return [];
 
-  // Only care about ongoing matches with significant events
   const activeMatches = matches.filter(
     (m) =>
       m.status &&
@@ -153,7 +149,6 @@ export async function checkCricketUpdates(groupId: string): Promise<
 
   if (!activeMatches.length) return [];
 
-  // Prefer IPL — don't alert the group about Legends League or other tournaments
   const iplMatches = activeMatches.filter(isIPL);
   const candidates = iplMatches.length ? iplMatches : activeMatches;
   const topMatch = candidates[0];
@@ -161,10 +156,9 @@ export async function checkCricketUpdates(groupId: string): Promise<
     ?.map((s) => `${s.inning}:${s.r}/${s.w}`)
     .join("|") ?? topMatch.status;
 
-  // Dedup: skip if we already sent this exact score
   const { data: existing } = await supabase
     .from("ba_cricket_state")
-    .select("last_score, match_status")
+    .select("last_score, match_status, last_sent_at")
     .eq("group_id", groupId)
     .eq("match_id", topMatch.id)
     .maybeSingle();
@@ -172,30 +166,27 @@ export async function checkCricketUpdates(groupId: string): Promise<
   if (existing?.last_score === currentScore) return [];
   if (existing?.match_status === "completed") return [];
 
-  // Rate-limit commentary: at most once every 20 minutes
-  const lastTime = lastCommentaryAt.get(groupId) ?? 0;
-  if (Date.now() - lastTime < 20 * 60 * 1000) {
-    // Score changed but we're within rate limit — update state silently, no message
-    await supabase.from("ba_cricket_state").upsert({
-      group_id: groupId,
-      match_id: topMatch.id,
-      last_score: currentScore,
-      last_sent_at: new Date().toISOString(),
-      match_status: topMatch.status.toLowerCase().includes("won") ? "completed" : "live",
-    }, { onConflict: "group_id,match_id" });
-    return [];
+  // Rate-limit commentary: at most once every 20 minutes (DB-backed so restarts don't reset it)
+  if (existing?.last_sent_at) {
+    const msSinceLastSent = Date.now() - new Date(existing.last_sent_at).getTime();
+    if (msSinceLastSent < 20 * 60 * 1000) {
+      // Score changed but within rate limit — update state silently, no message
+      await supabase.from("ba_cricket_state").upsert({
+        group_id: groupId, match_id: topMatch.id,
+        last_score: currentScore,
+        match_status: topMatch.status.toLowerCase().includes("won") ? "completed" : "live",
+      }, { onConflict: "group_id,match_id" });
+      return [];
+    }
   }
 
-  // Upsert cricket state
   await supabase.from("ba_cricket_state").upsert({
-    group_id: groupId,
-    match_id: topMatch.id,
+    group_id: groupId, match_id: topMatch.id,
     last_score: currentScore,
     last_sent_at: new Date().toISOString(),
     match_status: topMatch.status.toLowerCase().includes("won") ? "completed" : "live",
   }, { onConflict: "group_id,match_id" });
 
-  lastCommentaryAt.set(groupId, Date.now());
   const commentary = await generateCricketCommentary(topMatch);
   const message = `${formatScore(topMatch)}\n${commentary}`;
 

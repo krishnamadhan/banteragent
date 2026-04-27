@@ -85,7 +85,18 @@ async function connectToWhatsApp() {
     }
   });
 
-  await client.initialize();
+  try {
+    await client.initialize();
+  } catch (err: any) {
+    const msg = err?.message ?? "";
+    if (msg.includes("Execution context was destroyed") || msg.includes("navigation")) {
+      console.log("⚠️ Browser navigation error during init, retrying in 10s...");
+      try { await client.destroy(); } catch {}
+      setTimeout(connectToWhatsApp, 10000);
+    } else {
+      throw err;
+    }
+  }
 }
 
 async function listGroups() {

@@ -1,5 +1,6 @@
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
+import { getGroupConfig } from "./group-config.js";
 import { handleGameCommand, clearGroupArchive, getArchiveStats } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
@@ -22,6 +23,7 @@ import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
 import { handlePiAdminMessage } from "./pi-admin.js";
 import { handleQuoteCommand } from "./features/quotes.js";
 import { handleFantasyCommand } from "./features/fantasy.js";
+import { handleSolliAdiTrigger, handleSolliAdiPredict, handleSolliAdiStatus, handleSolliAdiLeaderboard } from "./features/solli-adi.js";
 
 function parseCommand(text: string): { command: string; args: string } {
   if (!text.startsWith("!")) return { command: "chat", args: text };
@@ -40,6 +42,12 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
   if (command !== "chat") {
     devlog({ type: "command", command, args, groupId: msg.groupId, sender: msg.senderName });
+  }
+
+  // Per-group command filtering — silently ignore disabled commands
+  const groupConfig = getGroupConfig(msg.groupId);
+  if (command !== "chat" && groupConfig.disabledCommands.has(command)) {
+    return { response: "" };
   }
 
   switch (command) {
@@ -219,19 +227,20 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
     // Mode change
     case "mode": {
-      const validModes: Record<string, string> = {
-        roast:  "🔥 ROAST MODE — Default. Savage lovingly.",
-        nanban: "🤝 NANBAN MODE — Warm nanban energy. Pure support, zero roast.",
-        peter:  "🎓 PETER MODE — Broken English, over-explains everything, very much sophisticated itself.",
-      };
+      const validModes = Object.fromEntries(
+        Object.entries(groupConfig.modes).map(([k, v]) => [k, v.description])
+      );
+      const modeList = Object.keys(validModes).map(m => "!mode " + m).join(" / ");
       const picked = args.trim().toLowerCase();
       if (!picked) {
         const current = await (await import("./claude.js")).getGroupMode(msg.groupId);
-        return { response: `Current mode: *${current}*\n\nChange: !mode roast / !mode nanban / !mode peter` };
+        return { response: `Current mode: *${current}*
+
+Change: ${modeList}` };
       }
       if (!validModes[picked]) {
         return {
-          response: `Machaan, valid modes: *roast* / *nanban* / *peter*\nExample: !mode peter`,
+          response: `Valid modes: ${modeList}`,
         };
       }
       setGroupMode(msg.groupId, picked);
@@ -434,8 +443,119 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
       if (command === "fl") return handleFantasyCommand("leaderboard", msg);
       return handleFantasyCommand(args, msg);
 
+    // Solli Adi over-prediction game
+    case "solli":
+    case "solliadi": {
+      const sub = args.toLowerCase().trim();
+      if (sub === "status" || sub === "s") return handleSolliAdiStatus(msg);
+      if (sub === "lb" || sub === "leaderboard" || sub === "score") return handleSolliAdiLeaderboard(msg);
+      return handleSolliAdiTrigger(msg);
+    }
+    case "predict":
+    case "p": {
+      const pSub = args.toLowerCase().trim();
+      if (pSub === "status" || pSub === "s") return handleSolliAdiStatus(msg);
+      return handleSolliAdiPredict(msg, args);
+    }
+
     case "pi":
       return { response: "" }; // handled at listener level (needs client + full JID)
+
+
+    case "welcome":
+    case "intro": {
+      const w1 = `🏏 *Fantasy League Bot — Welcome da!*
+
+Ennoda job: live IPL scores, fantasy leaderboard, group banter — eppavum ready.
+
+Two modes:
+📋 *!mode serious* — Clean cricket. Just facts.
+🔥 *!mode roast* — Kuthu energy. Slight vulgarity. Cricket only.
+
+Default is *serious mode*. Switch anytime.`;
+      const w2 = `🎮 *How to Play — IPL Fantasy (ipl11.vercel.app)*
+
+1️⃣ Sign up at *ipl11.vercel.app*
+2️⃣ Build a team of 11 players (₹100 credit budget)
+3️⃣ Pick Captain (2× pts) & Vice-Captain (1.5× pts)
+4️⃣ Lock in your team *before the match starts*
+5️⃣ Watch your points roll in live 🚀
+
+*Team rules:*
+• Min 1 WK, 1 BAT, 1 BOWL, 1 AR | Max 7 from same team
+• ₹100 credit limit | Captain ≠ Vice-Captain
+
+Use *!fantasy join* to get the contest invite code for this group.`;
+      const w3 = `📊 *TATA IPL Scoring Rules*
+
+*🏏 Batting*
+Run → +1 | 4 → +1 | 6 → +2
+30-run bonus → +4 | 50 → +8 | 100 → +16
+Duck (out for 0) → −2
+SR penalty: SR<70 → −6pts | SR<60 → −10pts (10+ balls faced)
+
+*🎯 Bowling*
+Wicket → +25 | Maiden → +8
+Economy ≤6 → +6 | ≤7 → +4 | ≤8 → +2
+
+*🤝 Fielding*
+Catch → +8 | Stumping → +12
+Run-out direct → +12 | Run-out indirect → +6
+
+*👑 Multipliers*
+Captain = 2× all points | Vice-Captain = 1.5× all points`;
+      const w4 = `⚡ *Bot Commands*
+
+*Cricket:*
+!cricket — Live scores
+!cricket alerts on/off — Auto score alerts
+!news ipl — IPL headlines
+
+*Fantasy:*
+!fantasy join — Contest invite link
+!fl — Live leaderboard (shortcut)
+!fantasy xi — Playing XI (after toss)
+!fantasy score <player> — Player points
+!fantasy stats — Top performers
+
+*Solli Adi (over prediction game):*
+!solli — Start prediction for next over
+!predict <runs> — Submit your guess
+!solli lb — Solli Adi leaderboard
+
+*Polls & Utility:*
+!poll <question> / !vote <n>
+!toss | !split <amount> <people> | !8ball <question>`;
+      const w5 = `🎲 *Games Available*
+
+!quiz — Tamil movie emoji quiz
+!wordle — Guess Tamil movie title (6 tries)
+!fastfinger (!ff) — First to type wins
+!trivia — Tamil Nadu trivia
+!riddle — Tamil riddle
+!score — Weekly game leaderboard
+
+🛠️ *Settings & Help*
+
+!mode serious/roast — Switch bot personality
+!mute / !unmute — Silence bot for 1 hour
+!help — Full command list
+
+🐛 *Report a Bug*
+!bug <description>
+Example: !bug fantasy leaderboard not loading
+
+Good luck with your fantasy team da! May your captain not DNB 🏏`;
+      return {
+        response: w1,
+        additionalMessages: [
+          { text: w2, delayMs: 600 },
+          { text: w3, delayMs: 600 },
+          { text: w4, delayMs: 600 },
+          { text: w5, delayMs: 600 },
+        ],
+      };
+    }
 
     // Free chat (default)
     case "chat":

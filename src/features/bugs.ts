@@ -43,6 +43,7 @@ export function handleBugReport(args: string, msg: BotMessage, recentMessages: s
 
   const entry = `## Bug #${bugNum} — ${timestamp}
 **Reporter:** ${msg.senderName} (\`${msg.from}\`)
+**Group:** \`${msg.groupId ?? msg.from}\`
 **Status:** \`OPEN\`
 **Description:** ${description}
 

@@ -377,23 +377,39 @@ function buildLeaderboard(leaderboard: any[], matchInfo: string, status: string,
   const hasBonus = bonusMap && bonusMap.size > 0;
   let msg = `🏆 *FANTASY LEADERBOARD*${hasBonus ? " (+ Solli Adi 📻)" : ""}\n_${matchInfo}_\n\n`;
 
+  // Fuzzy bonus lookup: WhatsApp contact names ("Madhu") may differ from app display names ("madhumithakanna")
+  const findBonus = (displayName: string): number => {
+    if (!bonusMap) return 0;
+    const direct = bonusMap.get(displayName);
+    if (direct !== undefined) return direct;
+    const dn = displayName.toLowerCase();
+    for (const [key, val] of bonusMap) {
+      const k = key.toLowerCase();
+      if (dn.startsWith(k) || k.startsWith(dn)) return val;
+    }
+    return 0;
+  };
+
   // Re-sort if bonus included
   let sorted = [...leaderboard];
   if (hasBonus) {
     sorted = sorted.map((e) => ({
       ...e,
-      total: (e.points ?? 0) + (bonusMap?.get(e.display_name) ?? 0),
+      total: (e.points ?? 0) + findBonus(e.display_name),
     })).sort((a, b) => b.total - a.total);
   }
 
-  sorted.forEach((e, i) => {
+  const display = sorted.slice(0, 10);
+  const hiddenCount = sorted.length - display.length;
+  display.forEach((e, i) => {
     const medal = medals[i] ?? `${i + 1}.`;
     const pts = e.points ?? 0;
-    const bonus = bonusMap?.get(e.display_name) ?? 0;
+    const bonus = findBonus(e.display_name);
     const bonusBit = bonus > 0 ? ` (+${bonus}🎙️)` : "";
     msg += `${medal} *${e.display_name}* — ${pts} pts${bonusBit}\n`;
     if (e.team_name) msg += `   _${e.team_name}_\n`;
   });
+  if (hiddenCount > 0) msg += `_...and ${hiddenCount} more_\n`;
 
   if (hasBonus) msg += `\n_🎙️ = Solli Adi bonus_\n`;
 
@@ -405,6 +421,11 @@ function buildLeaderboard(leaderboard: any[], matchInfo: string, status: string,
     msg += `\n_Match starting soon…_`;
   } else {
     msg += `\n_Join panna ippo time irukku!_`;
+  }
+
+  // Hint when very few entries are showing — someone might have missed joining
+  if (leaderboard.length > 0 && leaderboard.length < 4 && sorted.length < 4) {
+    msg += `\n_Missing? Join: *!fantasy join* 📱_`;
   }
 
   return msg;
@@ -607,22 +628,69 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
 
   // Match is done — send final results then mark completed
   if (match.status === "completed" || match.status === "in_review") {
-    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
+    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
     await saveState(state.match_id, groupId, { completed_at: new Date().toISOString() });
+
+    // Fetch Solli Adi bonus for this match+group
+    let bonusMap: Map<string, number> | undefined;
+    try {
+      const { data: rounds } = await supabase
+        .from("ba_solli_adi")
+        .select("id")
+        .eq("match_id", state.match_id)
+        .eq("group_id", groupId)
+        .eq("status", "resolved");
+      if (rounds?.length) {
+        const roundIds = rounds.map((r: any) => r.id);
+        const { data: bonusPreds } = await supabase
+          .from("ba_solli_adi_prediction")
+          .select("user_name, points_awarded")
+          .in("round_id", roundIds)
+          .gt("points_awarded", 0);
+        if (bonusPreds?.length) {
+          bonusMap = new Map<string, number>();
+          for (const p of bonusPreds) {
+            bonusMap.set(p.user_name, (bonusMap.get(p.user_name) ?? 0) + (p.points_awarded ?? 0));
+          }
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    // Fuzzy bonus lookup (WhatsApp name vs app display_name)
+    const findBonus = (displayName: string): number => {
+      if (!bonusMap) return 0;
+      const direct = bonusMap.get(displayName);
+      if (direct !== undefined) return direct;
+      const dn = displayName.toLowerCase();
+      for (const [key, val] of bonusMap) {
+        const k = key.toLowerCase();
+        if (dn.startsWith(k) || k.startsWith(dn)) return val;
+      }
+      return 0;
+    };
 
     let msg = `🏁 *MATCH OVER!* ${state.team_home} vs ${state.team_away}\n\n`;
     if (match.result_summary) msg += `📢 ${match.result_summary}\n\n`;
 
     if (lb?.leaderboard?.length) {
-      msg += `🏆 *FANTASY FINAL STANDINGS*\n`;
+      const hasBonus = bonusMap && bonusMap.size > 0;
+      msg += `🏆 *FANTASY FINAL STANDINGS*${hasBonus ? " (+ Solli Adi 🎙️)" : ""}\n`;
       const medals = ["🥇", "🥈", "🥉"];
-      lb.leaderboard.forEach((e: any, i: number) => {
+      // Re-sort including bonus
+      const sorted = (lb.leaderboard as any[])
+        .map((e: any) => ({ ...e, total: (e.points ?? 0) + findBonus(e.display_name) }))
+        .sort((a: any, b: any) => b.total - a.total)
+        .slice(0, 10);
+      sorted.forEach((e: any, i: number) => {
         const medal = medals[i] ?? `${i + 1}.`;
-        msg += `${medal} *${e.display_name}* — ${e.points} pts`;
+        const bonus = findBonus(e.display_name);
+        const bonusBit = bonus > 0 ? ` (+${bonus}🎙️)` : "";
+        msg += `${medal} *${e.display_name}* — ${e.points} pts${bonusBit}`;
         if (e.prize_won > 0) msg += ` · 🎉 Won ${e.prize_won} pts`;
         msg += `\n`;
         if (e.team_name) msg += `   _${e.team_name}_\n`;
       });
+      if (hasBonus) msg += `_🎙️ = Solli Adi bonus_\n`;
     }
 
     if (top_performers?.length) {
@@ -724,9 +792,14 @@ export async function dailyContestCreate(
   if (!todayMatches.length) return results;
 
   for (const match of todayMatches) {
-    // Check if already announced for the primary group (the one that runs admin tasks)
-    const primaryState = await getState(match.id, primaryGroupId);
-    if (primaryState?.announced_at) continue;
+    // Check per-group which ones still need announcement.
+    // Handles case where contest was manually created from main group before scheduled task ran.
+    const unnouncedGroups: string[] = [];
+    for (const gid of allGroupIds) {
+      const s = await getState(match.id, gid);
+      if (!s?.announced_at) unnouncedGroups.push(gid);
+    }
+    if (!unnouncedGroups.length) continue;
 
     const contestRes = await botFetch("/contest", {
       method: "POST",
@@ -748,7 +821,7 @@ export async function dailyContestCreate(
     };
 
     // Save state for EVERY group so each can independently track toss/live/completed
-    for (const gid of allGroupIds) {
+    for (const gid of unnouncedGroups) {
       await saveState(match.id, gid, statePayload);
     }
 
@@ -758,7 +831,7 @@ export async function dailyContestCreate(
     );
     const fullAnn = botJoin ? `${ann}\n\n${botJoin}` : ann;
 
-    for (const gid of allGroupIds) {
+    for (const gid of unnouncedGroups) {
       const existing = results.get(gid);
       results.set(gid, existing ? `${existing}\n\n─────────────\n\n${fullAnn}` : fullAnn);
     }
@@ -1176,6 +1249,66 @@ function formatDiff(data: any): string {
   return msg;
 }
 
+// ─── Serious-mode DB context enrichment ──────────────────────────────────────
+// Called by claude.ts when mode=serious on IPL group to inject live data.
+
+export async function getIplDbContext(message: string, groupId: string): Promise<string | null> {
+  const lower = message.toLowerCase();
+
+  const isPlayerQ = /player|squad|yaar.*pick|pick.*who|who.*pick|available|bench|playing/.test(lower);
+  const isTeamQ   = /my team|un team|his team|show team|view team|team.*show/.test(lower);
+  const isLbQ     = /leaderboard|rank|points|standings|yaar first|who.*first|first.*place|யாரு/.test(lower);
+  const isMatchQ  = /next match|upcoming|schedule|match.*when|when.*match|today match|innikki|match iruk|ipo match|match nadak|match aagi|match irruk|innaiku match|innikku match/.test(lower);
+
+  if (!isPlayerQ && !isTeamQ && !isLbQ && !isMatchQ) return null;
+
+  try {
+    const state = await getActiveState(groupId);
+    const parts: string[] = [];
+
+    if ((isPlayerQ || isTeamQ) && state) {
+      const squadData = await botFetch(`/squad?match_id=${state.match_id}`);
+      if (squadData?.players?.length) {
+        const lines = (squadData.players as any[]).map((p: any) => {
+          const stats: string[] = [];
+          if (p.season_runs   > 0) stats.push(`${p.season_runs}R`);
+          if (p.season_wickets > 0) stats.push(`${p.season_wickets}W`);
+          if (p.recent_runs   > 0) stats.push(`recent:${p.recent_runs}R`);
+          if (p.recent_wickets > 0) stats.push(`recent:${p.recent_wickets}W`);
+          return `${p.name} | ${p.role} | ${p.ipl_team} | ${p.credit_value ?? "?"}cr${stats.length ? " | " + stats.join(" ") : ""}`;
+        });
+        parts.push(`SQUAD — ${state.team_home} vs ${state.team_away}:\n${lines.join("\n")}`);
+      }
+    }
+
+    if (isLbQ && state) {
+      const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=10`);
+      if (lb?.leaderboard?.length) {
+        const lines = (lb.leaderboard as any[]).map((e: any, i: number) =>
+          `${i + 1}. ${e.display_name} — ${e.points ?? 0}pts${e.team_name ? " (" + e.team_name + ")" : ""}`
+        );
+        parts.push(`LEADERBOARD — ${state.team_home} vs ${state.team_away}:\n${lines.join("\n")}`);
+      }
+    }
+
+    if (isMatchQ) {
+      const upcoming = await botFetch("/upcoming");
+      if (upcoming?.matches?.length) {
+        const lines = (upcoming.matches as any[]).slice(0, 5).map((m: any) =>
+          `${m.team_home} vs ${m.team_away} — ${formatIST(m.scheduled_at)} [${m.status}]`
+        );
+        parts.push(`UPCOMING MATCHES:\n${lines.join("\n")}`);
+      }
+    }
+
+    if (!parts.length) return null;
+    return `\n\nLIVE DATA (from database — use this to answer accurately):\n${parts.join("\n\n")}`;
+  } catch (e: any) {
+    console.warn("[ipl-context] DB fetch failed:", e?.message);
+    return null;
+  }
+}
+
 // ─── Command handlers ─────────────────────────────────────────────────────────
 
 async function handleJoin(msg: BotMessage): Promise<string> {
@@ -1231,7 +1364,7 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
     );
     if (!next) return "Active contest illai da! Match announce aagum pothu solluven.";
 
-    const lb = await botFetch(`/leaderboard?match_id=${next.id}&limit=10`);
+    const lb = await botFetch(`/leaderboard?match_id=${next.id}&limit=20`);
     if (!lb?.leaderboard?.length) {
       return (
         `📅 *UPCOMING: ${next.team_home} vs ${next.team_away}*\n` +
@@ -1259,7 +1392,7 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
     }
   }
 
-  const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=10`);
+  const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
   if (lb?.error) return "Leaderboard fetch panna mudiyala. Try again!";
   if (!lb?.leaderboard?.length) return "Innum yaarum join pannala da 😅 Join pannu: !fantasy join";
 
@@ -1368,6 +1501,45 @@ async function handleDiff(msg: BotMessage, args: string): Promise<string> {
   return formatDiff(data);
 }
 
+async function handleViewTeam(msg: BotMessage, args: string): Promise<string> {
+  const personQuery = args.trim();
+  if (!personQuery) return "Usage: *!fantasy view <name>* — e.g. !fantasy view Krish";
+
+  const state = await getActiveState(msg.groupId);
+  if (!state) return "Active match illai da! Match announce aagum pothu try pannu.";
+
+  const data = await botFetch(
+    `/team-view?match_id=${state.match_id}&user=${encodeURIComponent(personQuery)}`
+  );
+
+  if (data?.error) return data.error;
+
+  const { display_name, team_name, rank, total_points, players, captain, vc } = data;
+
+  const roleIcon: Record<string, string> = { WK: "🧤", BAT: "🏏", AR: "⚡", BOWL: "🎯" };
+  const hasPoints = (players as any[]).some((p: any) => p.points > 0);
+
+  let out = `👤 *${display_name}'s Team*`;
+  if (team_name) out += ` — _${team_name}_`;
+  if (rank)      out += ` (#${rank})`;
+  out += `\n_${state.team_home} vs ${state.team_away}_\n\n`;
+
+  for (const p of players as any[]) {
+    const icon   = roleIcon[p.role] ?? "•";
+    const capTag = p.is_captain ? " 👑C" : p.is_vc ? " ⭐VC" : "";
+    const pts    = hasPoints ? ` — ${p.points}pts${p.is_captain ? " (×2)" : p.is_vc ? " (×1.5)" : ""}` : "";
+    out += `${icon} ${p.name} (${p.ipl_team})${capTag}${pts}\n`;
+  }
+
+  out += `\n👑 C: *${captain?.name ?? "—"}* | ⭐ VC: *${vc?.name ?? "—"}*`;
+  if (hasPoints) {
+    out += `\n🏆 Total: *${total_points} pts*`;
+    if (rank) out += ` | Rank *#${rank}*`;
+  }
+
+  return out;
+}
+
 // Admin commands
 
 async function handleLock(msg: BotMessage): Promise<string> {
@@ -1460,19 +1632,35 @@ async function handleSyncXI(msg: BotMessage): Promise<string> {
   void msg; // everyone can run admin commands
 
   const state = await getActiveState(msg.groupId);
-
   if (!state) return "Active match illai!";
 
-  const res = await botFetch("/playing-xi", {
+  // Try syncing playing XI from Cricbuzz; fall back to score sync if auth fails
+  let xiSynced = false;
+  const xiSyncRes = await botFetch("/playing-xi", {
     method: "POST",
     body: JSON.stringify({ match_id: state.match_id }),
   });
 
-  if (res?.error) return `Sync failed: ${res.error}`;
+  if (xiSyncRes?.error) {
+    // playing-xi sync failed (Unauthorized or other) — fall back to score sync
+    const syncFallback = await botFetch("/sync", {
+      method: "POST",
+      body: JSON.stringify({ match_id: state.match_id }),
+    });
+    if (syncFallback?.error) {
+      return `Sync failed da — try again in a minute! (${xiSyncRes.error})`;
+    }
+  } else {
+    xiSynced = true;
+  }
 
-  // Show the XI list
+  // Show current XI data (may already be populated from earlier toss sync)
   const xiData = await botFetch(`/playing-xi?match_id=${state.match_id}`);
-  const xiMsg = xiData?.playing_xi ? buildTossAnnouncement(xiData.match, xiData.playing_xi) : "Playing XI synced! Use !fantasy xi to see.";
+  const xiMsg = xiData?.playing_xi
+    ? buildTossAnnouncement(xiData.match, xiData.playing_xi)
+    : `✅ Sync done! *${state.team_home} vs ${state.team_away}* — use *!fantasy xi* to see playing XI.`;
+
+  if (!xiSynced) return xiMsg; // skip bot team re-pick if XI sync failed
 
   // Re-pick bot team now that XI is confirmed
   const matchInfo = state.team_home && state.team_away ? `${state.team_home} vs ${state.team_away}` : state.match_id;
@@ -1575,6 +1763,7 @@ function buildHelp(): string {
     `!fantasy lb — Leaderboard (syncs live scores first)\n` +
     `!fantasy diff — Compare top 2 teams side-by-side\n` +
     `!fantasy diff Krish Madhan — Compare two specific teams\n` +
+    `!fantasy view <name> — See someone\'s full team + points\n` +
     `!fantasy stats — Top scorer points\n` +
     `!fantasy score <player> — Specific player stats\n` +
     `!fantasy xi — Playing XI (post-toss)\n\n` +
@@ -1615,6 +1804,10 @@ export async function handleFantasyCommand(
 
     case "score":
       return { response: await handleStats(msg, rest) };
+
+    case "view":
+    case "team":
+      return { response: await handleViewTeam(msg, rest) };
 
     case "diff":
     case "compare":

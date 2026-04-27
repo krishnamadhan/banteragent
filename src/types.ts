@@ -12,4 +12,5 @@ export interface BotMessage {
 export interface CommandResult {
   response: string;
   mentions?: string[]; // WhatsApp JIDs to @mention in the reply (e.g. ["13135550002@c.us"])
+  additionalMessages?: Array<{ text: string; delayMs?: number }>; // extra messages sent in sequence
 }

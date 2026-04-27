@@ -207,6 +207,22 @@ read()
 !shutdown ? shutdown Pi`;
         break;
 
+      // Commands handled by the main router — fall through so they work in DM too
+      case "bug":
+      case "fantasy":
+      case "fl":
+      case "solli":
+      case "predict":
+        return false;
+
+      // Commands handled by the main router — fall through so they work in DM too
+      case "bug":
+      case "fantasy":
+      case "fl":
+      case "solli":
+      case "predict":
+        return false;
+
       default:
         reply = `Unknown command: !${cmd}\nSend *!help* for available commands.`;
     }
