@@ -1,5 +1,6 @@
 import type { BotMessage } from "../types.js";
 import { supabase } from "../supabase.js";
+import { getGroupConfig } from "../group-config.js";
 
 // ===== Zodiac helpers =====
 const ZODIAC_SIGNS = [
@@ -251,6 +252,9 @@ export async function getZodiacQuestion(
   phone: string,
   name: string
 ): Promise<string | null> {
+  const cfg = getGroupConfig(groupId);
+  if (cfg.disabledTasks.has("horoscope")) return null;
+
   const profile = await getProfile(groupId, phone);
   if (profile?.zodiac_sign) return null; // already know
 

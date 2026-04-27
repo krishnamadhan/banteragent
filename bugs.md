@@ -1604,3 +1604,31 @@ _Lucknow Super Giants vs Rajasthan Royals_
 ```
 
 **Fix notes:** Root cause — `sync-live` only upserted `f11_player_stats` rows for players appearing in the Cricbuzz scorecard (batted/bowled). Players confirmed in the playing XI via `f11_match_players` who hadn't yet batted or bowled had no stats row, so the +4 XI bonus was never recorded. Fixed in both `src/app/api/cron/sync-live/route.ts` and `supabase/functions/sync-live/index.ts`: after the main scorecard upsert loop, fetch all `f11_match_players` with `is_playing_xi = true` and insert a zero-stat row with `fantasy_points = 4` for any not already covered — using `ignoreDuplicates: true` to avoid overwriting real scorecard data. Deploy: push ipl-fantasy → Vercel auto-deploy.
+## Bug #65 — 2026-04-27 10:04:03 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** horoscope not needed for this group
+
+**Recent chat context:**
+```
+  [Bot]: 💰 *DAILY MARKET UPDATE*
+_27 Apr 2026_
+
+🥇 *GRT Gold 22K:* ₹13,168/g  📈 +₹3
+📊 *Nifty 50:* 24,101  📈 +203pts
+
+💡 *Today's Tip:*
+Unga salary account la irukura money ah separate pannunga - salary account, expenses account, SIP account nu 3 different accounts use pannunga. Salary vandhadhum automatic standing instruction setup panni SIP account ku transfer pannunga, appo spending urge varaadhu and disciplined investing aagum.
+  [Harikrishnan D]: Guys follow the steps to login
+  [Bot]: Da Hari, cricket mattum pesunga da! IPL la focus pannunga! 🏏
+
+Login steps ellam veradhula kelu. Inga match updates, fantasy points, player stats mattum.
+
+Dei Harikrishnan D, nee enna raasi da? Person
+  [Krishna Madhan]: !bug horoscope not needed for this group
+```
+
+**Fix notes:** Added "horoscope" to the main group's `disabledTasks` in `group-config.ts` — the `taskHoroscope` function already gates on `isEnabled("horoscope", groupId)` so it will now silently skip. Also patched `getZodiacQuestion` in `features/profiles.ts` to return null when horoscope is disabled for the group, stopping the bot from appending zodiac-prompt questions to its responses. No changes to core files (listener.ts untouched).
+
+---
+
