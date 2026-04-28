@@ -1632,3 +1632,207 @@ Dei Harikrishnan D, nee enna raasi da? Person
 
 ---
 
+## Bug #66 — 2026-04-27 18:04:26 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Status:** `FIXED`
+**Description:** bot is saying no match today
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: Otha olaradha
+  [Virat]: Machi match irruku da nii poi paru da
+  [Bot]: Ey Krishna Madhan! "Olaradha" nu solra? 😂
+
+Naan cricket facts and fantasy tips dhan sollitu irundhen! Un frustration puriyudhu - IPL season wait panradhu kastam dhan!
+
+Aana machi, proper cricket disc
+  [Bot]: Ey Krishna Madhan! Olaradha nu solra, aana Virat kita poi confirm pannu - avan dhan match iruku nu adamant ah irukan! 😂
+
+Virat machi! Nee "match iruku" nu solra, aana BCCI website, Cricbuzz, ESPN ell
+  [Krishna Madhan]: !bug bot is saying no match today
+```
+
+**Fix notes:** Two root causes: (1) CRICKET SCORES rule in `sharedRules()` was too broad — "today's IPL fixtures" prevented Claude from even acknowledging a match exists. Fixed by narrowing the rule: Claude can say "there is a match today" when context confirms it, but still can't hallucinate specific scores/wickets/results. (2) `isMatchQ` regex in `getIplDbContext` didn't match Tanglish queries like "match iruku" or "match irruku". Fixed by adding `match iruk|ipo match|match nadak|match aagi|match irruk|innaiku match|innikku match` to the regex so IPL live data gets injected as context when users ask about matches in Tanglish. Deploy: restart bot.
+
+---
+
+## Bug #67 — 2026-04-27 19:10:27 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** sync failure
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: 10 mins after toss sync potruken
+  [Krishna Madhan]: !fantasy sync
+  [Bot]: Sync failed: Unauthorized
+  [Krishna Madhan]: Dei
+  [Krishna Madhan]: !bug sync failure
+```
+
+**Fix notes:** Root cause — `handleSyncXI` called `/api/bot/playing-xi` POST which returns 401 Unauthorized (internal `sync-squads` auth issue on the Vercel app). Previously it hard-stopped on any error. Fixed by adding a fallback in `handleSyncXI` in `fantasy.ts`: if `/playing-xi` POST fails, automatically fall back to `/sync` POST (live score sync). This still refreshes the fantasy app's scoring data even if the full XI sync fails. If both fail, shows a helpful retry message instead of a cryptic "Sync failed: Unauthorized". Deploy: restart bot.
+
+---
+
+## Bug #68 — 2026-04-27 20:13:20 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** dont allow prediction change
+
+**Recent chat context:**
+```
+  [Harikrishnan D]: !predict 12
+  [Bot]: 📻 *Harikrishnan D* bets *12 runs* in over 7! 🤞
+  [Madhu]: !predict 12
+  [Bot]: 📻 *Madhu* bets *12 runs* in over 7! 🤞
+  [Krishna Madhan]: !bug dont allow prediction change
+```
+
+**Fix notes:** Root cause — `handleSolliAdiPredict` used `upsert` with `onConflict: "round_id,user_phone"`, allowing the same user to overwrite their prediction for the same round. Fixed by checking for an existing prediction before insert: if one exists, return "nee already X runs predict pannirukke! Change panna mudiyaadhu da." Changed from `upsert` to a plain `insert` (which would fail on duplicate anyway, but the early check gives a friendly message). Deploy: restart bot.
+
+---
+
+## Bug #69 — 2026-04-27 20:47:43 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** improper result. 9th over score was 9 and madhu won. Points were not awarded. Also always trigger sync score whenever someone drops a prediction, see if the over has started. Cover all edge cases and add predict status command to check the current status ( also trigger sync score )
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD* (+ Solli Adi 📻)
+_Delhi Capitals vs Royal Challengers Bengaluru_
+
+🥇 *preethigamuruga* — 243.5 pts
+   _Team 1_
+🥈 *dineshkumar* — 229 pts
+   _Team 1_
+🥉 *vicky* — 221.5 pts
+  
+  [Madhu]: Loosu paya
+  [Madhu]: Enakh point tharamatran
+  [Krishna Madhan]: !bug improper result. 9th over score was 9 and madhu won. Points were not awarded. Also always trigger sync score whenever someone drops a prediction, see if the over has started. Cover all edge cases and add predict status command to check the current status ( also trigger sync score )
+```
+
+**Fix notes:** Three fixes in `solli-adi.ts`: (1) **Timing bug / wrong actualRuns**: When the 5-min sync fires and `completedOvers > round.over_number` (both start AND end of the target over happened within one sync window), the pending→open transition was incorrectly setting `score_at_over_start = currentRuns` (end-of-over score) then resolving with `actualRuns = 0`. Fixed: if `completedOvers > round.over_number` at transition time, void the round with a clear message — prevents bogus 0-run resolutions. (2) **Sync on prediction**: `handleSolliAdiPredict` now calls `checkAndResolveSolliAdi` immediately after saving — if the over is already complete when the prediction arrives, the resolution fires right away without waiting for the 5-min cron. (3) **`!predict status`**: Added routing in `router.ts` — `!predict status` (or `!predict s`) now delegates to `handleSolliAdiStatus`, showing the current round, predictions, and score. Deploy: restart bot.
+
+---
+
+## Bug #70 — 2026-04-27 20:49:31 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** krishna madhan team missing from leaderboard
+
+**Recent chat context:**
+```
+  [Bot]: 🏆 *FANTASY LEADERBOARD* (+ Solli Adi 📻)
+_Delhi Capitals vs Royal Challengers Bengaluru_
+
+🥇 *preethigamuruga* — 243.5 pts
+   _Team 1_
+🥈 *dineshkumar* — 229 pts
+   _Team 1_
+🥉 *vicky* — 221.5 pts
+  
+  [Krishna Madhan]: Krishna madhan yenga da
+  [Preethiga]: Yes yes mela oru leaderboard laium neenga illa
+  [Preethiga]: Naa atha msg pana vanthen divert aaiten
+  [Krishna Madhan]: !bug krishna madhan team missing from leaderboard
+```
+
+**Fix notes:** Root cause — only 3 entries in the ipl-fantasy contest (the app-side DB has no entry for Krishna Madhan's account for this match). This is likely because his app account wasn't linked or he didn't join the Group 2 contest for this specific match. Fixed on the bot side: `buildLeaderboard` in `fantasy.ts` now appends "Missing? Join: !fantasy join 📱" when fewer than 4 entries are showing, prompting users to check and join via the app. For the actual missing entry, Krishna Madhan needs to join the contest via the app link (!fantasy join) and his WA phone number must be linked in his f11_profile. Deploy: restart bot.
+
+---
+
+## Bug #71 — 2026-04-27 21:07:47 IST
+**Reporter:** Preethiga (`916374404892@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** Krishna Madhan is missing again from leaderboard
+
+**Recent chat context:**
+```
+  [Preethiga]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD* (+ Solli Adi 📻)
+_Delhi Capitals vs Royal Challengers Bengaluru_
+
+🥇 *dineshkumar* — 261 pts
+   _Team 1_
+🥈 *madhumithakanna* — 251 pts
+   _Team 1_
+🥉 *vicky* — 250.5 pts
+   _
+  [Preethiga]: !bug Krishna Madhan is missing again from leaderboard
+```
+
+**Fix notes:** Root cause: leaderboard API was fetched with limit=10 but KM was rank 11 in the contest (132 pts). After Solli Adi bonus re-sort, he would have ranked higher but never appeared in the API response to begin with. Fixed by increasing fetch limit to 20 and capping display at 10 entries — so bonus recipients below the fold are now included in the re-sort.
+
+---
+
+## Bug #72 — 2026-04-27 21:32:39 IST
+**Reporter:** Preethiga (`916374404892@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** Madhumitha’s “Solli Adi” points have not been added she should be awarded an additional 100 points on top of her current total
+
+**Recent chat context:**
+```
+  [Preethiga]: Ada aandava
+  [Preethiga]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD* (+ Solli Adi 📻)
+_Delhi Capitals vs Royal Challengers Bengaluru_
+
+🥇 *dineshkumar* — 290 pts
+   _Team 1_
+🥈 *madhumithakanna* — 280 pts
+   _Team 1_
+🥉 *vicky* — 279.5 pts
+   _
+  [Preethiga]: !bug Madhumitha’s “Solli Adi” points have not been added she should be awarded an additional 100 points on top of her current total
+```
+
+**Fix notes:** Root cause: WhatsApp contact name Madhu did not match app display_name madhumithakanna, so bonus lookup returned 0 and the +50 pts marker never appeared. Fixed by adding fuzzy prefix matching in findBonus() — if display_name starts with the Solli Adi user_name (or vice versa), the bonus is applied. Note: actual bonus is 50 pts (1 correct round — over 6 predicted 12, actual 12), not 100 as reported.
+
+---
+
+## Bug #73 — 2026-04-27 22:09:02 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** bonus not added to final message post match got over
+
+**Recent chat context:**
+```
+  [Bot]: Otha Krishna! Nee "sorry kelu" nu solra? 
+
+Dei mairu, un fantasy team performance paatha nee thaan daily sorry solla vendiyathu da! Un captain picks, un team selection — ellathukum group members kitta
+  [Madhu]: 🫡🫡🫡
+  [Madhu]: 335 plus 50 ilaya apo enaku
+  [Bot]: Dai Madhu, 335 + 50 = 385 da! 🧮
+
+Yen ma, calculator eh phone la iruku but TanglishBot kitta kekara? Lazy level: Marina Beach weekend traffic! 😄
+
+Aana solliten, 385 thaan answer. Next time mental mat
+  [Krishna Madhan]: !bug bonus not added to final message post match got over
+```
+
+**Fix notes:** The final standings block was a separate code path that never fetched Solli Adi bonus data — it just showed raw e.points. Fixed by adding the same bonus lookup (including fuzzy name matching) and re-sort logic from handleLeaderboard into the match-completed handler. Also bumped leaderboard fetch to limit=20 so bonus can affect sort order correctly.
+
+---
+
+## Bug #74
+
+**Reported by:** Claude (log audit 2026-04-27)
+**Group:** `120363399878677641@g.us`
+**Time:** 2026-04-27 21:23 IST
+**Status:** `FIXED`
+
+**Description:** `ba_group_settings_bot_mode_check` DB constraint violation when `!mode` command is used. The table check constraint only allows a subset of mode values, but the code `validModes` object in `router.ts` has more options (nanban, peter, etc.). Mode change still applied in-memory via setGroupMode but didn't persist to DB — mode resets on restart.
+
+**Fix notes:** Root cause — `migration_002.sql` added `bot_mode` column with `CHECK (bot_mode IN ('roast', 'friendly', 'savage'))` but the valid modes grew to include `nanban`, `peter`, `serious`. The DB upsert in `router.ts` silently failed on constraint violation, so mode never persisted. Fixed by switching to file-based mode persistence (`data/group-modes.json`) — same pattern as the question archive system. `setGroupMode` in `claude.ts` now writes to JSON file on every change. `getGroupMode` reads file first on cold load, falls back to DB for backward compat. Removed the broken DB upsert from `router.ts`. No DB migration needed. Deploy: restart bot.
+
+---
