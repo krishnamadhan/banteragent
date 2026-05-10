@@ -23,6 +23,8 @@ import {
   syncLiveScores,
   sendLiveUpdate,
   enforceDeadlines,
+  checkAndSendToss,
+  syncPlayingXiNow,
 } from "./features/fantasy.js";
 import { supabase } from "./supabase.js";
 import type { BotMessage } from "./types.js";
@@ -288,8 +290,16 @@ async function taskFantasyScheduleSync(groupId: string) {
 
 async function taskFantasyContestCreate(groupId: string) {
   if (!process.env.FANTASY_BOT_SECRET) return;
-  const msg = await dailyContestCreate(groupId);
-  if (msg) { await sendMessage(groupId, msg); addBotMessageToHistory(groupId, msg); }
+  const { getAllGroupIds, getGroupConfig } = await import("./group-config.js");
+  // All groups that have at least one fantasy notification task enabled
+  const fantasyGroups = getAllGroupIds().filter(
+    (gid) => !getGroupConfig(gid).disabledTasks.has("fantasy-morning-winners"),
+  );
+  const results = await dailyContestCreate(groupId, fantasyGroups);
+  for (const [gid, msg] of results) {
+    await sendMessage(gid, msg);
+    addBotMessageToHistory(gid, msg);
+  }
 }
 
 async function taskFantasyPrematch1530(groupId: string) {
@@ -304,12 +314,34 @@ async function taskFantasyPrematch1930(groupId: string) {
   if (msg) { await sendMessage(groupId, msg); addBotMessageToHistory(groupId, msg); }
 }
 
+async function taskFantasyXiSync1950(_groupId: string) {
+  if (!process.env.FANTASY_BOT_SECRET) return;
+  await syncPlayingXiNow();
+}
+
 async function taskFantasySyncLive(groupId: string) {
   if (!process.env.FANTASY_BOT_SECRET) return;
+
+  // Fallback toss detection — runs every 5 min so a prematch task failure
+  // never silently blocks the entire live-update chain.
+  const tossMsg = await checkAndSendToss(groupId);
+  if (tossMsg) {
+    const { getAllGroupIds } = await import("./group-config.js");
+    for (const gid of getAllGroupIds()) {
+      await sendMessage(gid, tossMsg);
+      addBotMessageToHistory(gid, tossMsg);
+    }
+  }
+
   const msg = await syncLiveScores(groupId);
   if (msg) {
-    await sendMessage(groupId, msg);
-    addBotMessageToHistory(groupId, msg);
+    // Broadcast match-start and score notifications to ALL configured groups
+    const { getAllGroupIds } = await import("./group-config.js");
+    const allGroups = getAllGroupIds();
+    for (const gid of allGroups) {
+      await sendMessage(gid, msg);
+      addBotMessageToHistory(gid, msg);
+    }
   }
 }
 
@@ -408,6 +440,7 @@ const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
   "fantasy-contest-create":  taskFantasyContestCreate,
   "fantasy-prematch-1530":   taskFantasyPrematch1530,
   "fantasy-prematch-1930":   taskFantasyPrematch1930,
+  "fantasy-xi-sync-1950":    taskFantasyXiSync1950,
   "fantasy-sync-live":       taskFantasySyncLive,
   "fantasy-leaderboard":     taskFantasyLeaderboard,
   "fantasy-enforce-deadlines": taskFantasyEnforceDeadlines,
@@ -431,6 +464,29 @@ const _instrumentedSend = async (to: string, msg: string) => {
 // The flag _taskSentMsg is reset per runTask call.
 
 let _currentTaskName = "";
+
+// Tasks where transient errors (Vercel 502, timeouts) are expected — skip DM noise
+const SILENT_ERROR_TASKS = new Set([
+  "reminders-check", "cricket-alerts", "fantasy-enforce-deadlines",
+  "fantasy-sync-live", "fantasy-leaderboard",
+  "fantasy-prematch-1530", "fantasy-prematch-1930", "fantasy-xi-sync-1950",
+]);
+
+// Throttle: only one DM per task name per hour
+const _lastErrorDm = new Map<string, number>();
+
+async function notifyAdminError(task: string, err: string): Promise<void> {
+  if (SILENT_ERROR_TASKS.has(task)) return;
+  const now = Date.now();
+  if ((now - (_lastErrorDm.get(task) ?? 0)) < 60 * 60 * 1000) return;
+  _lastErrorDm.set(task, now);
+  const admin = process.env.BOT_OWNER_PHONE ?? process.env.PI_ADMIN_NUMBER;
+  if (!admin) return;
+  const time = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" });
+  try {
+    await sendMessage(admin, `⚠️ *Task Error* [${time}]\n\nTask: \`${task}\`\nError: ${err.slice(0, 300)}`);
+  } catch { /* don't let DM failure mask original error */ }
+}
 
 // Once-per-day tasks: skip if already ran today (guards against pi-scheduler restart dupes)
 const ONCE_DAILY_TASKS = new Set([
@@ -456,7 +512,6 @@ export async function runTask(name: string, groupId: string): Promise<{ ok: bool
       console.log(`[task-runner] ${name} already ran today — skipping dupe`);
       return { ok: true };
     }
-    _taskRanOnDate.set(key, today);
   }
 
   _taskSentMsg = false;
@@ -465,6 +520,7 @@ export async function runTask(name: string, groupId: string): Promise<{ ok: bool
 
   try {
     await fn(groupId);
+    if (ONCE_DAILY_TASKS.has(name)) _taskRanOnDate.set(name + ":" + groupId, istDateStr());
     monTaskEnd(name, { ok: true, sent: _taskSentMsg });
     return { ok: true };
   } catch (e: any) {
@@ -472,6 +528,7 @@ export async function runTask(name: string, groupId: string): Promise<{ ok: bool
     console.error(`[task-runner] ${name} failed:`, errMsg);
     monTaskEnd(name, { ok: false, sent: _taskSentMsg, error: errMsg });
     monError(name, e);
+    await notifyAdminError(name, errMsg);
     return { ok: false, error: errMsg };
   } finally {
     _currentTaskName = "";
