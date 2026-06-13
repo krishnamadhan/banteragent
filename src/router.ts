@@ -1,3 +1,5 @@
+import { readdirSync, existsSync } from "fs";
+import { resolve } from "path";
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
 import { getGroupConfig } from "./group-config.js";
@@ -22,8 +24,13 @@ import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
 import { handlePiAdminMessage } from "./pi-admin.js";
 import { handleQuoteCommand } from "./features/quotes.js";
-import { handleFantasyCommand } from "./features/fantasy.js";
+import { handleFantasyCommand, handleWinCommand } from "./features/fantasy.js";
 import { handleSolliAdiTrigger, handleSolliAdiPredict, handleSolliAdiStatus, handleSolliAdiLeaderboard } from "./features/solli-adi.js";
+import {
+  handleExpenseMessage, handleSpentCommand, handleAnalyseCommand, handleReportCommand,
+  handleSplitCommand, handleSettleCommand, handleHistoryCommand,
+  handleDeleteCommand, handleSummaryCommand, expensesHelp,
+} from "./features/expenses/index.js";
 
 function parseCommand(text: string): { command: string; args: string } {
   if (!text.startsWith("!")) return { command: "chat", args: text };
@@ -48,6 +55,30 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   const groupConfig = getGroupConfig(msg.groupId);
   if (command !== "chat" && groupConfig.disabledCommands.has(command)) {
     return { response: "" };
+  }
+
+  // ── Expense group — dedicated routing ─────────────────────────────────────
+  if (groupConfig.isExpenseGroup) {
+    switch (command) {
+      case "spent":   return { response: await handleSpentCommand(msg) };
+      case "analyse":
+      case "analyze": return { response: await handleAnalyseCommand(msg) };
+      case "report":  return { response: await handleReportCommand(msg, args) };
+      case "split":   return { response: await handleSplitCommand(msg, args) };
+      case "settle":  return { response: await handleSettleCommand(msg, args) };
+      case "history": return { response: await handleHistoryCommand(msg, args) };
+      case "delete":  return { response: await handleDeleteCommand(msg, args) };
+      case "summary": return { response: await handleSummaryCommand(msg) };
+      case "h":
+      case "help":    return { response: expensesHelp() };
+      case "chat": {
+        // Natural language — try to detect expense; fall back to silent
+        const result = await handleExpenseMessage(msg);
+        return { response: result ?? "" };
+      }
+      default:
+        return { response: `Unknown command. Send \`!help\` for the full list.` };
+    }
   }
 
   switch (command) {
@@ -109,6 +140,7 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !myinfo show
 
 🎉 *Fun:*
+  !jinx — RCB Anti-Jinx meme (Finals special 🔴)
   !roast <name> — Savage roast
   !roastbattle (!rb) PersonA vs PersonB — Epic roast battle
   !roastmetaai — Mock that useless Meta AI
@@ -208,6 +240,23 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "cricket":
       return handleCricketCommand(args, msg);
 
+    // TN Election commands (one-day feature)
+    case "tnlist": {
+      const { callElectionBot } = await import("./features/election.js");
+      return { response: await callElectionBot("list") };
+    }
+
+    case "tn": {
+      const { callElectionBot } = await import("./features/election.js");
+      // !tn consti 63  or  !tn 63
+      const constMatch = args.trim().match(/^consti\s+(\d+)$|^(\d+)$/i);
+      if (constMatch) {
+        const num = constMatch[1] || constMatch[2];
+        return { response: await callElectionBot("consti", { num }) };
+      }
+      return { response: await callElectionBot("trigger") };
+    }
+
     // Polls
     case "poll":
     case "vote":
@@ -243,13 +292,7 @@ Change: ${modeList}` };
           response: `Valid modes: ${modeList}`,
         };
       }
-      setGroupMode(msg.groupId, picked);
-      const { error: modeErr } = await supabase.from("ba_group_settings").upsert({
-        group_id: msg.groupId,
-        bot_mode: picked,
-        updated_at: new Date().toISOString(),
-      });
-      if (modeErr) console.error("[mode] Failed to save mode to DB:", modeErr.message);
+      setGroupMode(msg.groupId, picked); // persists to data/group-modes.json
       return { response: validModes[picked] };
     }
 
@@ -310,6 +353,32 @@ Change: ${modeList}` };
     case "quote":
     case "quoteboard":
       return { response: handleQuoteCommand(command, args, msg) };
+
+    // RCB Anti-Jinx memes
+    case "jinx":
+    case "antijinx": {
+      const JINX_DIR = resolve("/home/pi/banteragent/memes/jinx");
+      const EXTS = [".jpg", ".jpeg", ".png", ".webp"];
+      let files: string[] = [];
+      if (existsSync(JINX_DIR)) {
+        files = readdirSync(JINX_DIR)
+          .filter((f) => EXTS.some((e) => f.toLowerCase().endsWith(e)))
+          .map((f) => resolve(JINX_DIR, f));
+      }
+      if (!files.length) {
+        return { response: "🛡️ Anti-jinx shields activate aaguthu! (Machi, add images to memes/jinx/ folder first 😅)" };
+      }
+      const pick = files[Math.floor(Math.random() * files.length)]!;
+      const captions = [
+        "🛡️ RCB Anti-Jinx activated! Jinx-ku vera chance illai! 🔥",
+        "⚡ THAAD deployed! No jinx can touch us today! RCB 🔴",
+        "🧴 Anti-Jinx spray spreading... Ee saari RCB thokkum! 💪",
+        "🏹 Brahmastra release aaguthu! Jinx neutralized! EE SAALA CUP NAMDE! 🏆",
+        "☢️ Nuclear anti-jinx mode: ON. GT-ku chance illai! 🚀",
+      ];
+      const caption = captions[Math.floor(Math.random() * captions.length)]!;
+      return { response: "", mediaFile: pick, mediaCaption: caption };
+    }
 
     // Fun
     case "movie":
@@ -443,6 +512,10 @@ Change: ${modeList}` };
       if (command === "fl") return handleFantasyCommand("leaderboard", msg);
       return handleFantasyCommand(args, msg);
 
+    // Fantasy ranking leaderboard (gift voucher challenge)
+    case "win":
+      return handleWinCommand();
+
     // Solli Adi over-prediction game
     case "solli":
     case "solliadi": {
@@ -456,6 +529,234 @@ Change: ${modeList}` };
       const pSub = args.toLowerCase().trim();
       if (pSub === "status" || pSub === "s") return handleSolliAdiStatus(msg);
       return handleSolliAdiPredict(msg, args);
+    }
+
+    case "cosmo": {
+      // DM-only; listener already gates DMs to BOT_OWNER_PHONE → owner path.
+      if (msg.isGroup) return { response: "" };
+      const rawArgs = args.trim();
+      const [subWord, ...restWords] = rawArgs.split(/\s+/);
+      const sub = (subWord || "").toLowerCase();
+      const rest = restWords.join(" ").trim();
+      const cosmoBase = `http://127.0.0.1:8080`;   // camera stream server
+      const apiBase = `http://127.0.0.1:8000`;     // cosmo brain debug API
+
+      const apiJson = async (path: string, init?: RequestInit): Promise<any> => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        try {
+          const r = await fetch(`${apiBase}${path}`, { ...init, signal: ctrl.signal });
+          return await r.json();
+        } finally {
+          clearTimeout(t);
+        }
+      };
+      const robotToken = process.env.ROBOT_API_TOKEN || "";
+      const authHeaders: Record<string, string> = robotToken
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${robotToken}` }
+        : { "Content-Type": "application/json" };
+      const apiAuth = async (path: string, body?: object): Promise<any> =>
+        apiJson(path, { method: "POST", headers: authHeaders, body: body ? JSON.stringify(body) : undefined });
+      const offline = { response: "🤖 Cosmo brain is offline. Try *!cosmo start*" };
+
+      if (sub === "live" || sub === "stream" || sub === "") {
+        return {
+          response: `🤖 *Cosmo Live Feed*\n\nOpen this in your browser:\nhttp://100.101.250.126:8080\n\n_Works anywhere via Tailscale_`,
+        };
+      }
+
+      if (sub === "snap" || sub === "pic" || sub === "photo") {
+        fetch(`${cosmoBase}/snap-send`, { method: "POST" }).catch(() => {});
+        return { response: "📸 Snapping... sending in a sec!" };
+      }
+
+      if (sub === "record" || sub === "rec" || sub === "video") {
+        fetch(`${cosmoBase}/record-send`, { method: "POST" }).catch(() => {});
+        return { response: `🎥 Recording ${30}s clip... will send when done (~35s)` };
+      }
+
+      if (sub === "status") {
+        try {
+          const [h, s] = await Promise.all([apiJson("/health"), apiJson("/state")]);
+          const e = s.emotion || {};
+          const a = s.attention || {};
+          const up = h.uptime_s || 0;
+          const upStr = up > 3600 ? `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m`;
+          return {
+            response:
+              `🤖 *Cosmo Status*\n` +
+              `Up: ${upStr} | CPU ${h.cpu_temp_c}°C | RAM ${h.free_ram_mb}MB free\n` +
+              `Mood ${e.mood ?? "—"} | Energy ${e.energy ?? "—"} | ${e.description || ""}\n` +
+              `Sees: ${a.person || "no one"} (${a.persons_visible ?? 0} visible)\n` +
+              `Last: ${(s.behavior || {}).last_response || "—"}`,
+          };
+        } catch { return offline; }
+      }
+
+      if (sub === "caps") {
+        try {
+          const c = await apiJson("/caps");
+          const icon: Record<string, string> = { ready: "✅", simulated: "🧪", degraded: "⚠️", failed: "❌", absent: "⬜" };
+          const lines = Object.entries(c).map(([k, v]) => `${icon[String(v)] || "·"} ${k}: ${v}`);
+          return { response: `🤖 *Cosmo Capabilities*\n${lines.join("\n")}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "mood") {
+        try {
+          const s = await apiJson("/state");
+          const e = s.emotion || {};
+          return {
+            response:
+              `🤖 *Cosmo Mood*\nMood: ${e.mood}\nEnergy: ${e.energy}\nArousal: ${e.arousal}\nAttachment: ${e.attachment}\n_${e.description || ""}_`,
+          };
+        } catch { return offline; }
+      }
+
+      if (sub === "last") {
+        try {
+          const r = await apiJson("/cosmo/last?n=5");
+          const evs = (r.events || []).map((ev: any) => `• ${typeof ev === "string" ? ev : JSON.stringify(ev)}`);
+          return { response: `🤖 *Cosmo — recent events*\n${evs.join("\n") || "nothing yet"}\nLast said: ${r.last_response || "—"}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "log") {
+        try {
+          const r = await apiJson("/logs/tail?lines=10");
+          const lines = (r.lines || []).slice(-10);
+          return { response: `🤖 *Cosmo log tail*\n\`\`\`${lines.join("\n").slice(-1500)}\`\`\`` };
+        } catch { return offline; }
+      }
+
+      if (sub === "say") {
+        if (!rest) return { response: "Usage: !cosmo say <text>" };
+        try {
+          const r = await apiJson("/cosmo/say", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: rest }),
+          });
+          return { response: r.ok ? `🗣️ Cosmo says: "${r.text}"` : `❌ ${JSON.stringify(r)}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "sim") {
+        if (!rest) return { response: "Usage: !cosmo sim <capability> (e.g. locomotion)" };
+        try {
+          const r = await apiJson("/cosmo/sim", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cap: rest.toLowerCase() }),
+          });
+          if (r.ok) return { response: `🧪 ${r.cap} → ${r.state}` };
+          return { response: `❌ ${r.error}\nValid: ${(r.valid || []).join(", ")}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "start" || sub === "stop") {
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const run = promisify(exec);
+        try {
+          const cmd = sub === "start"
+            ? "pm2 start /home/pi/robot/ecosystem.config.js"
+            : "pm2 stop cosmo";
+          await run(cmd, { timeout: 30000 });
+          return { response: sub === "start" ? "🤖 Cosmo waking up... give it ~30s" : "😴 Cosmo stopped." };
+        } catch (e: any) {
+          return { response: `❌ pm2 ${sub} failed: ${String(e?.message || e).slice(0, 200)}` };
+        }
+      }
+
+      if (sub === "test") {
+        try {
+          const steps = ["face_seen", "touch", "emotion_happy"];
+          const results: string[] = [];
+          for (const trigger of steps) {
+            const r = await apiAuth(`/trigger/${trigger}`);
+            results.push(`${r.ok ? "✅" : "❌"} ${trigger}`);
+            await new Promise(res => setTimeout(res, 1500));
+          }
+          return { response: `🧪 *Cosmo test sequence*\n${results.join("\n")}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "move") {
+        const dirEndpoint: Record<string, string> = {
+          fwd: "/motor/forward", forward: "/motor/forward",
+          back: "/motor/back", backward: "/motor/back",
+          left: "/motor/left", right: "/motor/right",
+          stop: "/motor/stop",
+        };
+        const dir = (restWords[0] || "").toLowerCase();
+        const endpoint = dirEndpoint[dir];
+        if (!endpoint) return { response: `Usage: !cosmo move <fwd|back|left|right|stop>` };
+        try {
+          const body = dir === "stop" ? undefined : { speed: 0.4, duration: 1.0 };
+          const r = await apiAuth(endpoint, body);
+          return { response: r.ok ? `🚗 Moving ${dir}` : `❌ ${JSON.stringify(r)}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "home") {
+        // !cosmo home <type> <device> [state]
+        // e.g. !cosmo home device_on tv   or   !cosmo home presence home
+        const [evType, device, state] = restWords;
+        if (!evType) return { response: `Usage: !cosmo home <type> <device> [state]\nTypes: device_on device_off motion presence scene` };
+        try {
+          const payload: Record<string, string> = { type: evType };
+          if (device) payload.device = device;
+          if (state) payload.state = state;
+          const r = await apiJson("/smarthome/event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          return { response: r.ok ? `🏠 Smart home event injected: ${evType} / ${device || "—"}` : `❌ ${JSON.stringify(r)}` };
+        } catch { return offline; }
+      }
+
+      if (sub === "health") {
+        try {
+          const { exec } = await import("child_process");
+          const { promisify } = await import("util");
+          const run = promisify(exec);
+          const [h, s, pm2Out] = await Promise.all([
+            apiJson("/health"),
+            apiJson("/state"),
+            run("pm2 jlist", { timeout: 5000 }).then(({ stdout }) => {
+              const list = JSON.parse(stdout) as any[];
+              return list.map((p: any) => `${p.name}: ${p.pm2_env?.status} (↺${p.pm2_env?.restart_time})`).join("\n");
+            }).catch(() => "pm2 unavailable"),
+          ]);
+          const e = s.emotion || {};
+          const up = h.uptime_s || 0;
+          const upStr = up > 3600 ? `${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m`;
+          return {
+            response:
+              `🤖 *Cosmo Health*\n` +
+              `Up: ${upStr} | CPU ${h.cpu_temp_c}°C | RAM ${h.free_ram_mb}MB free\n` +
+              `Mood: ${e.mood} | Energy: ${e.energy} | Arousal: ${e.arousal} | Attach: ${e.attachment}\n` +
+              `_${e.description || ""}_\n\n` +
+              `*PM2*\n${pm2Out}`,
+          };
+        } catch { return offline; }
+      }
+
+      return {
+        response:
+          `Cosmo commands:\n` +
+          `!cosmo live — browser stream\n!cosmo snap — photo\n!cosmo record — 30s video\n` +
+          `!cosmo status — health + mood + attention\n!cosmo caps — capability states\n` +
+          `!cosmo mood — personality state\n!cosmo last — recent events\n!cosmo log — log tail\n` +
+          `!cosmo say <text> — speak via TTS\n!cosmo sim <cap> — simulate capability\n` +
+          `!cosmo test — run face+touch+emotion test sequence\n` +
+          `!cosmo move <fwd|back|left|right|stop> — motor control\n` +
+          `!cosmo home <type> <device> [state] — inject smart home event\n` +
+          `!cosmo health — full system health + PM2\n` +
+          `!cosmo start / stop — pm2 control`,
+      };
     }
 
     case "pi":
