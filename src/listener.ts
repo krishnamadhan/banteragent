@@ -4,10 +4,15 @@ import type { BotMessage } from "./types.js";
 import { monGroupMsg } from "./monitor.js";
 import { routeMessage } from "./router.js";
 import { trackMessage } from "./features/analytics.js";
-import { shouldAutoRespond, quickAutoRespondCheck, getGroupMode, addBotMessageToHistory } from "./claude.js";
+import { shouldAutoRespond, quickAutoRespondCheck, getGroupMode, addBotMessageToHistory, getImageResponse } from "./claude.js";
 import { getGroupSettings } from "./group-settings-cache.js";
 import { extractProfileInfo, getZodiacQuestion } from "./features/profiles.js";
 import { pickMeme, sendMeme } from "./features/memes.js";
+import pkg from "whatsapp-web.js";
+const { MessageMedia } = pkg;
+
+// ===== Sticker state =====
+let lastSavedStickerId: string | null = null; // tracks last sticker saved via DM for tag-enhance flow
 
 // ===== Auto-response state (per-group) =====
 const lastAutoResponseTime = new Map<string, number>();
@@ -40,13 +45,15 @@ export async function handleMessage(client: any, rawMsg: any) {
   // Skip messages from self
   if (rawMsg.fromMe) return;
 
-  // Handle text messages AND video pushup submissions
+  // Handle text messages, video pushup submissions, image and sticker messages
   const text: string = rawMsg.body?.trim() ?? "";
   const isVideoPushup =
     rawMsg.hasMedia &&
     rawMsg.type === "video" &&
     text.toLowerCase().startsWith("!pushup");
-  if (!text && !isVideoPushup) return;
+  const isImage = rawMsg.hasMedia && rawMsg.type === "image";
+  const isSticker = rawMsg.hasMedia && rawMsg.type === "sticker";
+  if (!text && !isVideoPushup && !isImage && !isSticker) return;
 
   const chat = await rawMsg.getChat();
   const isGroup = chat.isGroup;
@@ -71,11 +78,21 @@ export async function handleMessage(client: any, rawMsg: any) {
     quotedMessageId: rawMsg.hasQuotedMsg ? (await rawMsg.getQuotedMessage())?.id?._serialized : undefined,
   };
 
-  // Only respond in the configured groups (main + IPL group 2)
-  const targetGroup = process.env.BOT_GROUP_ID;
-  const targetGroup2 = process.env.BOT_GROUP2_ID;
-  const allowedGroups = [targetGroup, targetGroup2].filter(Boolean) as string[];
-  if (isGroup && allowedGroups.length > 0 && allowedGroups[0] !== "120363xxxx@g.us" && !allowedGroups.includes(msg.groupId)) return;
+  // Only respond in all configured groups (read live from .env so new groups are picked up without restart)
+  const { getAllGroupIds } = await import("./group-config.js");
+  const allowedGroups = getAllGroupIds();
+  const isOtherGroup = isGroup && allowedGroups.length > 0 && !allowedGroups.includes(msg.groupId);
+
+  // Silently harvest stickers from other groups for the library, then stop
+  if (isOtherGroup && isSticker) {
+    const { saveSticker } = await import("./features/stickers.js");
+    rawMsg.downloadMedia().then((media: any) =>
+      saveSticker(media.data, media.mimetype, "group", [], true)  // skipAnalysis — no Vision cost for harvested stickers
+    ).catch(() => {});
+    return;
+  }
+
+  if (isOtherGroup) return;
 
   // Only respond to DMs from the bot owner — block all other DMs (prevents Dominos/promo loops)
   const ownerPhone = process.env.BOT_OWNER_PHONE;
@@ -113,6 +130,34 @@ export async function handleMessage(client: any, rawMsg: any) {
     return;
   }
 
+  // ===== CONSTRUCTION IMAGE SCAN (!fund / !add + image) =====
+  if (isImage) {
+    const cmd = text.trim().toLowerCase();
+    if (cmd.startsWith("!fund") || cmd.startsWith("!add")) {
+      const mode = cmd.startsWith("!fund") ? "fund" : "add";
+      const { handleConstructionImage } = await import("./features/construction/imageHandler.js");
+      handleConstructionImage(client, rawMsg, msg, mode).catch(console.error);
+      return;
+    }
+  }
+
+  // ===== IMAGE / STICKER ANALYSIS INTERCEPTION =====
+  // Helper: get image/sticker rawMsg from current message or quoted message
+  async function getImageSource(): Promise<{ msg: any; kind: "image" | "sticker" } | null> {
+    if (isImage) return { msg: rawMsg, kind: "image" };
+    if (isSticker) return { msg: rawMsg, kind: "sticker" };
+    if (rawMsg.hasQuotedMsg) {
+      try {
+        const quoted = await rawMsg.getQuotedMessage();
+        if (quoted?.hasMedia && quoted?.type === "image") return { msg: quoted, kind: "image" };
+        if (quoted?.hasMedia && quoted?.type === "sticker") return { msg: quoted, kind: "sticker" };
+      } catch (e) {
+        console.error("[image] getQuotedMessage error:", e);
+      }
+    }
+    return null;
+  }
+
   // Track message for analytics
   trackMessage(msg).catch(console.error);
   // Monitor: log group activity for engagement analysis
@@ -123,6 +168,51 @@ export async function handleMessage(client: any, rawMsg: any) {
   // Add to recent messages buffer
   recentMessages.push(`[${senderName}]: ${text}`);
   if (recentMessages.length > MAX_RECENT) recentMessages.shift();
+
+  // ===== DM TAG ENHANCE — text reply to sticker-save message updates when_to_use =====
+  if (!isGroup && !isSticker && text && rawMsg.hasQuotedMsg) {
+    try {
+      const quoted = await rawMsg.getQuotedMessage();
+      if (quoted?.fromMe && quoted?.body?.includes("use it when:") && lastSavedStickerId) {
+        const { loadLibrary } = await import("./features/stickers.js");
+        const { writeFileSync } = await import("fs");
+        const lib = loadLibrary();
+        const entry = lib.find((e: any) => e.id === lastSavedStickerId);
+        if (entry) {
+          entry.when_to_use = text;
+          writeFileSync("/home/pi/banteragent/data/sticker-library.json", JSON.stringify(lib, null, 2));
+          await rawMsg.reply(`✏️ Updated! Now I'll use that sticker when: _${text}_`);
+          lastSavedStickerId = null;
+          return;
+        }
+      }
+    } catch {}
+  }
+
+  // ===== DM STICKER — save + ack (must be before isDM dispatch so it doesn't fall into routeMessage) =====
+  if (isSticker && !isGroup) {
+    const { saveSticker } = await import("./features/stickers.js");
+    try {
+      const media = await rawMsg.downloadMedia();
+      const res = await saveSticker(media.data, media.mimetype, "dm", []);
+      if (res.result === "saved") {
+        lastSavedStickerId = res.entry!.id;
+        await rawMsg.reply(
+          `✅ *Sticker saved!*\n\n` +
+          `👁 *What I see:* ${res.entry!.description}\n` +
+          `🎯 *I'll use it when:* ${res.entry!.when_to_use}\n\n` +
+          `_Reply to this message with a better "use when" description to improve it._`
+        );
+      } else if (res.result === "duplicate") {
+        await rawMsg.reply("Already got this sticker machaan, duplicate da. 🔁");
+      } else {
+        await rawMsg.reply("Sticker save aagala da, try again. 😬");
+      }
+    } catch (e) {
+      console.error("[sticker] DM save error:", e);
+    }
+    return;
+  }
 
   // ===== DETERMINE IF BOT SHOULD RESPOND =====
   const lowerText = text.toLowerCase();
@@ -157,14 +247,48 @@ export async function handleMessage(client: any, rawMsg: any) {
       if (!cleanText) cleanText = "Enna machaan, solla?";
     }
 
+    // If there's an image/sticker involved, analyze it with Claude Vision
+    const imageSource = await getImageSource();
+    if (imageSource) {
+      try {
+        const media = await imageSource.msg.downloadMedia();
+        const imageReply = await getImageResponse(groupId, senderName, media.data, media.mimetype, cleanText);
+        await sendReply(client, rawMsg, imageReply);
+        if (isGroup) {
+          addBotMessageToHistory(msg.groupId, imageReply);
+          addRecentMessage(`[Bot]: ${imageReply.slice(0, 200)}`);
+        }
+        // Save sticker to library in background (fire-and-forget)
+        if (imageSource.kind === "sticker") {
+          const { saveSticker } = await import("./features/stickers.js");
+          saveSticker(media.data, media.mimetype, isGroup ? "group" : "dm", recentMessages.slice(-6))
+            .catch((e) => console.error("[sticker] background save error:", e));
+        }
+      } catch (e) {
+        console.error("Image analysis error:", e);
+        await rawMsg.reply("Image download aagala machaan, try again pannu.");
+      }
+      return;
+    }
+
     msg.text = cleanText;
-    const { response, mentions, additionalMessages } = await routeMessage(msg, recentMessages);
+    const { response, mentions, additionalMessages, mediaFile, mediaCaption } = await routeMessage(msg, recentMessages);
 
     // Append zodiac question if this person's profile is empty (max once per week)
     let fullResponse = response;
     if (isGroup) {
       const zodiacQ = await getZodiacQuestion(msg.groupId, msg.from, msg.senderName).catch(() => null);
       if (zodiacQ) fullResponse = response + "\n\n" + zodiacQ;
+    }
+
+    // Send media if the command returned a file path
+    if (mediaFile) {
+      try {
+        const media = MessageMedia.fromFilePath(mediaFile);
+        await rawMsg.reply(media, undefined, mediaCaption ? { caption: mediaCaption } : undefined);
+      } catch (e) {
+        console.error("[media] Failed to send media:", e);
+      }
     }
 
     // Empty response = handler already sent its own message (e.g. memory game sends + schedules deletion)
@@ -191,16 +315,37 @@ export async function handleMessage(client: any, rawMsg: any) {
       const mode = await getGroupMode(msg.groupId);
       const meme = pickMeme(response, msg.text, mode);
       if (meme) {
-        // Small delay so it feels like a separate reaction, not the same message
         setTimeout(() => sendMeme(rawMsg, meme).catch(() => {}), 1500);
       }
+    }
+
+    // Occasionally send a matching sticker after the response (explicit mentions only, ~40% chance)
+    if (isGroup && Math.random() < 0.4) {
+      const { pickSticker, sendSticker } = await import("./features/stickers.js");
+      pickSticker(fullResponse).then((stickerId) => {
+        if (stickerId) {
+          setTimeout(() => sendSticker(msg.groupId, stickerId).catch(() => {}), 2000);
+        }
+      }).catch(() => {});
     }
 
     return;
   }
 
+  // ===== STICKER HANDLING (non-mention paths) =====
+  // Group sticker not mentioning the bot → save silently for learning
+  if (isSticker && isGroup) {
+    const { saveSticker } = await import("./features/stickers.js");
+    rawMsg.downloadMedia().then((media: any) =>
+      saveSticker(media.data, media.mimetype, "group", recentMessages.slice(-6))
+    ).catch(() => {});
+    return;
+  }
+
   // ===== AUTO-RESPONSE ENGINE =====
   if (isGroup) {
+    if (isImage) return; // images only analyzed when bot is explicitly mentioned
+
     const autoResponse = await evaluateAutoResponse(msg);
     if (autoResponse) {
       await sendReply(client, rawMsg, autoResponse);
@@ -269,13 +414,8 @@ async function evaluateAutoResponse(msg: BotMessage): Promise<string | null> {
 async function sendReply(client: any, rawMsg: any, text: string, mentions?: string[]) {
   try {
     if (mentions?.length) {
-      const mentionContacts = (
-        await Promise.allSettled(mentions.map((jid) => client.getContactById(jid)))
-      )
-        .filter((r) => r.status === "fulfilled")
-        .map((r) => (r as PromiseFulfilledResult<any>).value);
       const chat = await rawMsg.getChat();
-      await client.sendMessage(chat.id._serialized, text, { mentions: mentionContacts });
+      await client.sendMessage(chat.id._serialized, text, { mentions });
     } else {
       await rawMsg.reply(text);
     }
@@ -314,13 +454,7 @@ export async function sendMentionMessage(jid: string, text: string, phones: stri
     return;
   }
   try {
-    const mentions = (
-      await Promise.allSettled(phones.map((p) => client.getContactById(p)))
-    )
-      .filter((r) => r.status === "fulfilled")
-      .map((r) => (r as PromiseFulfilledResult<any>).value);
-
-    await client.sendMessage(jid, text, { mentions });
+    await client.sendMessage(jid, text, { mentions: phones });
   } catch (error) {
     console.error("Failed to send mention message, falling back:", error);
     try {
