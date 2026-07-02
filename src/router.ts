@@ -1,4 +1,5 @@
 import type { BotMessage, CommandResult } from "./types.js";
+import { writeFileSync } from "fs";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
 import { getGroupConfig } from "./group-config.js";
 import { handleGameCommand, clearGroupArchive, getArchiveStats, skipActiveGame } from "./features/games.js";
@@ -550,7 +551,19 @@ Change: ${modeList}` };
             method: "POST", headers, signal: ctrl.signal });
           clearTimeout(t);
           const j: any = await r.json().catch(() => ({}));
-          if (r.ok) return { response: `🎯 Calibrated! TV zone locked. Now *!led tv on* to sync.\n(zone: ${JSON.stringify(j.roi)})` };
+          if (r.ok) {
+            const caption = `🎯 Calibrated! TV boundary locked. Green outline = detected TV screen.\nNow send *!led tv on* to sync.\n(points: ${JSON.stringify(j.points || j.roi || [])})`;
+            if (j.preview_b64) {
+              const previewPath = "/tmp/ambilight-calibration-preview.jpg";
+              writeFileSync(previewPath, Buffer.from(String(j.preview_b64), "base64"));
+              return {
+                response: "",
+                mediaFile: previewPath,
+                mediaCaption: caption,
+              };
+            }
+            return { response: caption };
+          }
           return { response: `🎯 ${j.error || `failed (${r.status})`}` };
         } catch {
           return { response: "🎯 Couldn't reach Cosmo (:8000). Is cosmo up?" };
@@ -583,7 +596,7 @@ Change: ${modeList}` };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB\n📺 !led tv on / off — sync strip to the TV" };
+        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB\n🎯 !led calibrate — show full red TV screen, detect boundaries, send marked image\n📺 !led tv on / off — sync strip to the TV" };
       }
       try {
         const ctrl = new AbortController();
