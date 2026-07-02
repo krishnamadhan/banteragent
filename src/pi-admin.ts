@@ -319,7 +319,7 @@ async function handlePiCommand(
     }
 
     case "help":
-      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n!pi status — Full system report\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
+      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n!pi status — Full system report\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions\n\n*LED / TV Ambilight*\n!led calibrate — Show full red TV screen; detect TV boundary and send marked image\n!led tv on / off — Sync strip to TV colours / stop sync\n!led <colour> / off / bright <0-100> — Manual strip control\n!cosmo live — Open camera live feed\n\n*Danger Zone*\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
       break;
 
     default:
