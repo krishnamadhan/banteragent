@@ -1,83 +1,50 @@
-# TanglishBot v3 — Claude Code Context
+# BanterAgent v3 — Claude Code Context
 
-## What This Is
-A WhatsApp group bot that acts like a real funny Tamil friend. It speaks in Tanglish (Tamil written in English alphabets), plays games, tracks cricket scores, gives weekly awards, and auto-responds to conversations naturally. Built for a single friend group of ~7 people.
+WhatsApp group bot for one friend group (~7 people). Acts like a funny Tamil friend: Tanglish replies, games, fantasy cricket, expenses/construction tracking, awards, auto-responses.
 
-## Tech Stack
-- **Runtime**: Node.js + TypeScript (ESM modules)
-- **WhatsApp**: Baileys (unofficial WhatsApp Web API via WebSocket)
-- **AI**: Claude API (Sonnet 4) for all responses
-- **Database**: Supabase (Postgres)
-- **Scheduler**: node-cron (replaces Vercel cron — this is a persistent process, NOT serverless)
-- **Hosting**: Runs on home PC with PM2 for auto-restart
+## Hard Rules
+- **NEVER restart the `banteragent` PM2 process** — risks the WhatsApp auth session. Code edits stay dormant until its next *natural* restart (crash/reboot). Ship changes, verify `npx tsc --noEmit`, and wait — or get Madhan's explicit go-ahead.
+- WhatsApp auth lives in `auth/` (puppeteer Chromium profile, gitignored). Never delete or modify. Nightly backup: `~/scripts/nightly-backup.sh` → `~/backups/nightly/`.
+- Secrets in `.env` (gitignored). Never commit; never print values.
+- Ban-risk: this uses whatsapp-web.js (unofficial). Keep cooldowns/rate limits intact; don't add bulk-send loops.
+
+## Stack (actual — do not trust old docs mentioning Baileys)
+- Node.js + TypeScript ESM, run via `tsx src/index.ts` under PM2 (no build step in prod)
+- **whatsapp-web.js + puppeteer/Chromium** (`LocalAuth`, dataPath `./auth`)
+- Claude API (@anthropic-ai/sdk) · Supabase (Postgres) · sharp/exceljs/qrcode
+- Scheduling is EXTERNAL: `~/pi-scheduler` (separate PM2 app) fires cron → `POST 127.0.0.1:3099/run-task` → `src/task-runner.ts`
 
 ## Architecture
-This is a **persistent Node.js process** (NOT serverless). Baileys maintains a WebSocket connection to WhatsApp. The bot:
-1. Connects to WhatsApp via QR code scan (linked device)
-2. Receives ALL group messages via Baileys event listener
-3. Decides whether to respond (command, mention, reply, or auto-response)
-4. Sends responses back through Baileys
-5. Runs cron jobs for scheduled content (morning roast, horoscope, etc.)
-
-## Key Files
-- `src/index.ts` — Baileys connection, QR code, auto-reconnect, group listing
-- `src/listener.ts` — Message handler, trigger detection, auto-response engine
-- `src/router.ts` — Command routing (!quiz, !cricket, etc.)
-- `src/claude.ts` — Claude API (chat, structured output, auto-respond evaluation)
-- `src/scheduler.ts` — node-cron jobs for scheduled messages
-- `src/features/games.ts` — 7 games (quiz, dialogue, songlyric, wyr, wordchain, antakshari, trivia)
-- `src/features/analytics.ts` — Message tracking, stats, awards, lurker detection
-- `src/features/cricket.ts` — Live scores + Tanglish commentary
-- `src/features/polls.ts` — Polls with Claude-generated options
-- `src/features/reminders.ts` — Chat-based reminders with natural time parsing
-- `supabase/schema.sql` — Full database schema
-
-## Known Bugs To Fix
-1. **cricket.ts**: `checkCricketUpdates` needs to accept `groupId` param (scheduler passes it). Add dedup — store last sent match+score hash to avoid sending same update every 5 mins.
-2. **analytics.ts**: Remove `active_groups` table references — not needed for Baileys single-group setup. The `trackMessage` function should just insert into `message_stats`.
-3. **games.ts**: `!dialogue` and `!songlyric` commands are in the router but not implemented in games.ts yet. Build them following the same pattern as quiz/trivia.
-4. **All feature files**: Import paths use `"../types.js"` etc. with `.js` extension for ESM compatibility. Keep this pattern.
-5. **listener.ts**: The `sendMessage` function has a circular import with `index.ts` via `getSock()`. Consider passing the socket instance differently or using a shared module.
-
-## Features From PRD Not Yet Built
-Reference: TanglishBot-v2-PRD.docx (in project root or downloaded separately)
-
-### Must Build:
-- **Auto-Response Engine**: Core logic exists in listener.ts but needs tuning — the `shouldAutoRespond` Claude call needs testing and the "active chatting detection" (3+ msgs in 2 mins) is just a comment, not implemented
-- **!dialogue game**: Guess Tamil movie from a famous dialogue
-- **!songlyric game**: Complete the Tamil song lyric
-- **!score alltime**: All-time leaderboard (currently only weekly)
-- **Weekly leaderboard reset**: Run Monday 12 AM IST, archive weekly scores
-- **Auto-game drop**: When group is quiet 2+ hours (9AM-10PM), bot randomly starts a quiz/trivia. Max 2 auto-games per day.
-- **Monthly Group Recap**: 1st of each month at 10 AM IST
-- **!settings, !mute, !unmute**: Bot settings commands
-- **!schedule <feature> on/off**: Toggle scheduled content
-
-### Important Design Decisions:
-- Bot personality: Tanglish only, max 3 emojis, short punchy responses, Chennai slang
-- Auto-responses: Max 8/day, 45-min cooldown, no night mode (11PM-7AM), silent when humans are actively chatting
-- Games: One active game per group, 30-min expiry, leaderboard has weekly reset + all-time
-- Cricket: Key moments only (wickets, milestones, results), NOT every ball/over
-- All times are IST
-- The bot only operates in ONE configured group (BOT_GROUP_ID in .env)
-
-## Commands to Run
-```bash
-npm install          # Install dependencies
-npm run dev          # Dev mode with hot reload (tsx watch)
-npm run start        # Production mode
+```
+index.ts            client boot, QR, reconnect guard, graceful shutdown
+listener.ts         every message: rate-limit, triggers, stickers, auto-response engine
+router.ts           !command dispatch (936 lines)
+task-runner.ts      named scheduled tasks (called via internal server)
+internal-server.ts  HTTP :3099 (localhost): /run-task /notify /send-media /send-sticker /cosmo-notify /apply-fix
+claude.ts           Claude API: chat, auto-respond eval, vision
+group-config.ts     multi-group support, per-group disabled tasks (reads .env live)
+pi-admin.ts         !pi admin commands · admin-handler.ts: owner DM commands
+features/           games (2232 ln), fantasy (2190 ln), construction/, expenses/,
+                    stickers, picks, solli-adi, profiles, analytics, fun, ...
 ```
 
-## First Run Flow
-1. `npm run dev` → QR code appears in terminal
-2. Scan with spare phone's WhatsApp (Settings → Linked Devices)
-3. Bot connects and lists all groups with their IDs
-4. Copy target group ID → paste into `.env` as BOT_GROUP_ID
-5. Restart → bot is live in your group
+## Conventions & Gotchas
+- ESM: relative imports need `.js` extension (`"./listener.js"`)
+- JIDs are whatsapp-web.js format: `<phone>@c.us` (person), `<id>@g.us` (group). **Never `@s.whatsapp.net`** — that's Baileys and silently fails here.
+- `BOT_OWNER_PHONE` in .env is a bare number (no suffix)
+- Runtime state in `data/` (gitignored): sticker-library.json, group-modes.json, used-answers.json
+- `bugs.md` = the bug tracker (users file via !bug). GROUPS.md = group registry.
+- Heavy features are lazy-imported inside handlers — keep that pattern (startup time)
+- Bot replies only in configured groups + owner DMs; Meta AI messages filtered
 
-## Ban Risk Mitigation (Baileys)
-- Use a SPARE number, never your main WhatsApp
-- Don't send too many messages too fast
-- The auto-response cooldowns help with this
-- If banned: get new SIM, re-scan QR, bot is back
-- Your main number and friend group are never at risk
+## Verify Changes
+```bash
+npx tsc --noEmit        # must be clean — this is the only pre-restart check possible
+```
+Logs: `pm2 logs banteragent` · `~/logs/banteragent-*.log` · event trail `~/logs/monitor.jsonl`
+Internal server test: `curl -X POST 127.0.0.1:3099/run-task -d '{"task":"..."}'`
+
+## Related Docs
+- Global Pi rules + port registry: `~/.claude/CLAUDE.md` (3000/3001/3099 belong to this app)
+- PM2 topology: `ecosystem.config.cjs` (reconciled with live dump 2026-07-02)
+- Design decisions from the original PRD: max 3 emojis, short punchy Tanglish, auto-response max 8/day + 45-min cooldown + night silence 11PM–7AM, one active game per group, IST everywhere
