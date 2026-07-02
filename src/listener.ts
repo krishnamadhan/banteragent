@@ -67,6 +67,12 @@ export async function handleMessage(client: any, rawMsg: any) {
 
   const groupId = isGroup ? chat.id._serialized : senderPhone;
 
+  // Fetch the quoted message once — it was fetched up to 3x per message before
+  let quotedMsg: any = null;
+  if (rawMsg.hasQuotedMsg) {
+    try { quotedMsg = await rawMsg.getQuotedMessage(); } catch {}
+  }
+
   const msg: BotMessage = {
     from: senderPhone,
     senderName,
@@ -75,7 +81,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     messageId: rawMsg.id._serialized,
     isGroup,
     timestamp: rawMsg.timestamp,
-    quotedMessageId: rawMsg.hasQuotedMsg ? (await rawMsg.getQuotedMessage())?.id?._serialized : undefined,
+    quotedMessageId: quotedMsg?.id?._serialized,
   };
 
   // Only respond in all configured groups (read live from .env so new groups are picked up without restart)
@@ -146,15 +152,8 @@ export async function handleMessage(client: any, rawMsg: any) {
   async function getImageSource(): Promise<{ msg: any; kind: "image" | "sticker" } | null> {
     if (isImage) return { msg: rawMsg, kind: "image" };
     if (isSticker) return { msg: rawMsg, kind: "sticker" };
-    if (rawMsg.hasQuotedMsg) {
-      try {
-        const quoted = await rawMsg.getQuotedMessage();
-        if (quoted?.hasMedia && quoted?.type === "image") return { msg: quoted, kind: "image" };
-        if (quoted?.hasMedia && quoted?.type === "sticker") return { msg: quoted, kind: "sticker" };
-      } catch (e) {
-        console.error("[image] getQuotedMessage error:", e);
-      }
-    }
+    if (quotedMsg?.hasMedia && quotedMsg?.type === "image") return { msg: quotedMsg, kind: "image" };
+    if (quotedMsg?.hasMedia && quotedMsg?.type === "sticker") return { msg: quotedMsg, kind: "sticker" };
     return null;
   }
 
@@ -170,9 +169,9 @@ export async function handleMessage(client: any, rawMsg: any) {
   if (recentMessages.length > MAX_RECENT) recentMessages.shift();
 
   // ===== DM TAG ENHANCE — text reply to sticker-save message updates when_to_use =====
-  if (!isGroup && !isSticker && text && rawMsg.hasQuotedMsg) {
+  if (!isGroup && !isSticker && text && quotedMsg) {
     try {
-      const quoted = await rawMsg.getQuotedMessage();
+      const quoted = quotedMsg;
       if (quoted?.fromMe && quoted?.body?.includes("use it when:") && lastSavedStickerId) {
         const { loadLibrary } = await import("./features/stickers.js");
         const { writeFileSync } = await import("fs");
@@ -221,7 +220,7 @@ export async function handleMessage(client: any, rawMsg: any) {
   // "machi" anywhere as a standalone word counts as addressing the bot
   const machiAnywhere = /\bmachi\b/.test(lowerText);
   const isMentioned = machiAnywhere || TRIGGERS.some((t) => lowerText.includes(t));
-  const isReplyToBot = rawMsg.hasQuotedMsg && (await rawMsg.getQuotedMessage())?.fromMe;
+  const isReplyToBot = !!quotedMsg?.fromMe;
   const isDM = !isGroup;
 
   if (isCommand || isMentioned || isReplyToBot || isDM) {
@@ -272,7 +271,10 @@ export async function handleMessage(client: any, rawMsg: any) {
     }
 
     msg.text = cleanText;
+    const _t0 = Date.now();
     const { response, mentions, additionalMessages, mediaFile, mediaCaption } = await routeMessage(msg, recentMessages);
+    const _dur = Date.now() - _t0;
+    if (_dur > 3000) console.warn(`[latency] slow command "${cleanText.slice(0, 40)}" took ${_dur}ms`);
 
     // Append zodiac question if this person's profile is empty (max once per week)
     let fullResponse = response;
