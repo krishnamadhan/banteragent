@@ -77,7 +77,8 @@ const REGISTRY: GroupConfig[] = [
       nanban:  { description: "🤝 NANBAN MODE — Warm nanban energy. Pure support, zero roast." },
       peter:   { description: "🎓 PETER MODE — Broken English, over-explains everything, very much sophisticated itself." },
     },
-    disabledCommands: new Set<string>(),
+    // fantasy/f11/fl/win: IPL off-season — remove from this set next season
+    disabledCommands: new Set<string>(["fantasy", "f11", "fl", "win"]),
     disabledTasks:    new Set<string>(["horoscope"]),
     buildPrompt: buildMainModePrompt,
   },

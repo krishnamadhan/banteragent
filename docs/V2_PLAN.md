@@ -17,7 +17,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 
 ---
 
-## Phase 1 — Scoping: disable other groups, remove temp features ✅ pending
+## Phase 1 — Scoping: disable other groups, remove temp features ✅ DONE
 - [ ] group-config.ts: add `disabled` flag; disable Fantasy League + Expenses groups
       (registry entries kept for easy re-enable; listener/tasks skip disabled groups)
 - [ ] Remove election feature: src/features/election.ts + router !tn/!tnlist cases
@@ -75,3 +75,4 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 
 ## Status log
 - 2026-07-02 10:25 — Plan written. Starting Phase 1.
+- 2026-07-02 10:35 — Phase 1 DONE (pushed). Groups scoped, election+RCB removed, fantasy crons off, pi-scheduler restarted.

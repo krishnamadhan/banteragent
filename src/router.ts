@@ -1,5 +1,3 @@
-import { readdirSync, existsSync } from "fs";
-import { resolve } from "path";
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
 import { getGroupConfig } from "./group-config.js";
