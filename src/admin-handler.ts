@@ -294,6 +294,8 @@ ${task}`;
 !fixbugs — manually trigger bug fixer
 !temp — CPU temperature
 !ps — top processes by CPU
+!led calibrate — calibrate TV boundary from full red screen
+!led tv on|off — TV Ambilight sync
 !reboot — reboot Pi
 !shutdown — shutdown Pi
 !run <task> — spawn a Claude session to execute a task`;
@@ -306,6 +308,9 @@ ${task}`;
       case "solli":
       case "predict":
       case "cosmo":
+      case "led":
+      case "lights":
+      case "light":
         return false;
 
       default:
