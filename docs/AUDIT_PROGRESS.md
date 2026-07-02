@@ -103,3 +103,9 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   carry enough context without conversation history). VERIFIED: headless spawn under
   cron-equivalent env (`env -i`) returned WATCHDOG-SPAWN-OK. Untestable until a real
   limit: the -c path against a limit-stuck conversation — covered by the fallback.
+- 2026-07-02 15:50 — Watchdog POST-MORTEM from first real limit (12:40-14:40): resume
+  WORKED (15:00 run completed Bug #90 items, 20 min after reset) but limit errors at
+  13:00/14:00 were mislabeled "finished" — real message says "session limit", regex
+  only matched "usage limit". FIXED: broadened regex (verified vs real message), parse
+  exact reset time from error → wake 5 min after reset (verified: "2:40pm"→14:40),
+  limit hits no longer consume the daily spawn cap.
