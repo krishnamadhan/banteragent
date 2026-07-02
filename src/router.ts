@@ -554,6 +554,24 @@ Change: ${modeList}` };
         apiJson(path, { method: "POST", headers: authHeaders, body: body ? JSON.stringify(body) : undefined });
       const offline = { response: "🤖 Cosmo brain is offline. Try *!cosmo start*" };
 
+      if (sub === "mem" || sub === "ram") {
+        // v2: Cosmo memory footprint vs budget — reads PM2 locally, no robot API needed
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const out = await promisify(exec)("pm2 jlist").then(r => r.stdout).catch(() => "");
+        try {
+          const p = JSON.parse(out).find((x: any) => x.name === "cosmo");
+          if (!p) return { response: "🤖 Cosmo not found in PM2." };
+          const memMB = Math.round((p.monit?.memory ?? 0) / 1048576);
+          const cpu = p.monit?.cpu ?? 0;
+          const budget = 500, cap = 1200;
+          const icon = memMB > cap * 0.9 ? "🚨" : memMB > budget ? "⚠️" : "✅";
+          return { response: `🤖 *Cosmo Memory*\n\nRSS: *${memMB}MB* ${icon}\nCPU: ${cpu}%\nBudget: ${budget}MB · PM2 kill-cap: ${cap}MB\nRestarts: ${p.pm2_env?.restart_time ?? "?"}\n\n${memMB > budget ? "_Over budget — perception models resident. Watch for growth._" : "_Within budget._"}` };
+        } catch {
+          return { response: "🤖 Could not read PM2 stats." };
+        }
+      }
+
       if (sub === "live" || sub === "stream" || sub === "") {
         return {
           response: `🤖 *Cosmo Live Feed*\n\nOpen this in your browser:\nhttp://100.101.250.126:8080\n\n_Works anywhere via Tailscale_`,
@@ -766,6 +784,7 @@ Change: ${modeList}` };
           `!cosmo move <fwd|back|left|right|stop> — motor control\n` +
           `!cosmo home <type> <device> [state] — inject smart home event\n` +
           `!cosmo health — full system health + PM2\n` +
+          `!cosmo mem — RSS vs budget check\n` +
           `!cosmo start / stop — pm2 control`,
       };
     }

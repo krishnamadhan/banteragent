@@ -67,6 +67,71 @@ async function handlePiCommand(
   let reply = "";
 
   switch (subCmd) {
+    // ── v2: one-shot traffic-light routine check ─────────────────────────────
+    case "health":
+    case "check":
+    case "checks": {
+      const s = readStatus();
+      const [pm2Out, backupOut, errTail] = await Promise.all([
+        runSafe("pm2 jlist"),
+        runSafe("ls -t /home/pi/backups/nightly/*.tar.gz 2>/dev/null | head -3 | xargs -r ls -lh --time-style=+%Y-%m-%d | awk '{print $6, $5, $7}'"),
+        runSafe(`tail -50 "${ERR_FILE}" 2>/dev/null | grep -ci "error" || true`),
+      ]);
+
+      // PM2 all apps
+      let pm2Lines = "N/A";
+      let pm2Bad = 0;
+      try {
+        const procs = JSON.parse(pm2Out);
+        pm2Lines = procs.map((p: any) => {
+          const ok = p.pm2_env.status === "online";
+          if (!ok) pm2Bad++;
+          const mem = Math.round((p.monit?.memory ?? 0) / 1048576);
+          return `${ok ? "✅" : "🚨"} ${p.name} ${mem}MB r${p.pm2_env.restart_time}`;
+        }).join("\n");
+      } catch {}
+
+      // Backup freshness
+      let backupLine = "🚨 No backups found!";
+      if (backupOut) {
+        const newest = backupOut.split("\n")[0] ?? "";
+        const dateStr = newest.split(" ")[0] ?? "";
+        const ageDays = dateStr ? Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000) : 99;
+        backupLine = ageDays <= 1 ? `✅ Fresh (${dateStr})` : ageDays <= 2 ? `⚠️ ${ageDays}d old` : `🚨 ${ageDays}d old — check cron!`;
+      }
+
+      const temp = s ? fmtTemp(s.cpu_temp) : "N/A";
+      const ram  = s ? fmtPct(s.ram_percent) : "N/A";
+      const disk = s ? fmtPct(s.disk_percent, 70, 85) : "N/A";
+      const net  = s ? (s.internet_ok ? "✅" : "🚨 DOWN") : "N/A";
+      const errCount = parseInt(errTail) || 0;
+      const errLine = errCount === 0 ? "✅ clean" : errCount < 5 ? `⚠️ ${errCount} in last 50 lines` : `🚨 ${errCount} in last 50 lines`;
+      const verdict = pm2Bad === 0 && (s?.internet_ok ?? false) && !backupLine.startsWith("🚨")
+        ? "💚 *ALL SYSTEMS GO*" : "🔴 *ATTENTION NEEDED*";
+
+      reply = `${verdict}\n━━━━━━━━━━━━━━━━━━━\n🌡 ${temp}  💾 RAM ${ram}  💿 Disk ${disk}  📡 ${net}\n\n*PM2 (${pm2Bad === 0 ? "all online" : pm2Bad + " DOWN"})*\n${pm2Lines}\n\n*Nightly backup:* ${backupLine}\n*Bot errors:* ${errLine}\n\n_Deep dive: !pi status · !pi errors · !pi backup_`;
+      break;
+    }
+
+    // ── v2: backup status + manual trigger ───────────────────────────────────
+    case "backup": {
+      if (args[0] === "now") {
+        await client.sendMessage(to, "💾 Running backup now...");
+        await runSafe("/home/pi/scripts/nightly-backup.sh", 120000);
+      }
+      const listing = await runSafe("ls -lht /home/pi/backups/nightly/ 2>/dev/null | tail -n +2 | awk '{print $9, \"(\" $5 \")\"}' | head -9");
+      const logTail = await runSafe("tail -4 /home/pi/logs/nightly-backup.log 2>/dev/null");
+      reply = `*Nightly Backups* (~/backups/nightly)\n━━━━━━━━━━━━━━━━━━━\n\`\`\`\n${listing || "none found"}\n\`\`\`\n*Last run log:*\n\`\`\`\n${logTail || "no log"}\n\`\`\`\n_Trigger manually: !pi backup now_`;
+      break;
+    }
+
+    // ── v2: top processes by memory ──────────────────────────────────────────
+    case "top": {
+      const out = await runSafe("ps aux --sort=-rss | head -8 | awk 'NR>1{printf \"%.0fMB %.0f%% %s\\n\", $6/1024, $3, substr($11,1,40)}'");
+      reply = `*Top processes (RAM / CPU)*\n\`\`\`\n${out}\n\`\`\``;
+      break;
+    }
+
     case "status": {
       const s = readStatus();
       const temp = s ? fmtTemp(s.cpu_temp) : "N/A";
@@ -120,13 +185,9 @@ async function handlePiCommand(
     case "restart": {
       const svc = args[0]?.toLowerCase();
       if (svc === "bot") {
-        await client.sendMessage(to, "🔄 Restarting BanterAgent...");
-        await runSafe("pm2 restart banteragent");
-        await new Promise(r => setTimeout(r, 10000));
-        const status = await runSafe("pm2 jlist");
-        let ok = false;
-        try { ok = JSON.parse(status).find((p: any) => p.name === "banteragent")?.pm2_env?.status === "online"; } catch {}
-        reply = ok ? "✅ BanterAgent restarted successfully!" : "❌ BanterAgent may not have started. Check !pi errors";
+        // Restarting banteragent risks the WhatsApp session — always confirm first
+        await client.sendMessage(to, "⚠️ Restarting BanterAgent touches the WhatsApp session. Reply *!pi confirm restart* to proceed.");
+        return;
       } else if (svc === "pi") {
         // Ask for confirmation
         await client.sendMessage(to, "⚠️ This will reboot the entire Pi. Reply *!pi confirm reboot* to proceed.");
@@ -143,7 +204,17 @@ async function handlePiCommand(
         setTimeout(() => execAsync("sudo reboot").catch(() => {}), 5000);
         return;
       }
-      reply = "Unknown confirmation. Use: !pi confirm reboot";
+      if (args[0] === "restart") {
+        await client.sendMessage(to, "🔄 Restarting BanterAgent...");
+        await runSafe("pm2 restart banteragent");
+        await new Promise(r => setTimeout(r, 10000));
+        const status = await runSafe("pm2 jlist");
+        let ok = false;
+        try { ok = JSON.parse(status).find((p: any) => p.name === "banteragent")?.pm2_env?.status === "online"; } catch {}
+        reply = ok ? "✅ BanterAgent restarted successfully!" : "❌ BanterAgent may not have started. Check !pi errors";
+        break;
+      }
+      reply = "Unknown confirmation. Use: !pi confirm reboot | !pi confirm restart";
       break;
     }
 
@@ -156,8 +227,8 @@ async function handlePiCommand(
         if (buildOut.includes("error")) {
           reply = `❌ Build failed:\n\`\`\`\n${buildOut.slice(0, 500)}\n\`\`\``;
         } else {
-          await execAsync("pm2 restart banteragent");
-          reply = `✅ BanterAgent updated and restarted!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\``;
+          // v2: never auto-restart — code is ready, restart only on explicit confirm
+          reply = `✅ Code updated & build clean!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\`\n⚠️ Changes apply on next restart. Reply *!pi confirm restart* when ready.`;
         }
       } else {
         reply = "Usage: !pi update bot";
@@ -248,7 +319,7 @@ async function handlePiCommand(
     }
 
     case "help":
-      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n!pi status — Full system report\n!pi temp — CPU temperature\n!pi battery — Battery status\n!pi logs [n] — Last N log lines (default 20)\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions (default 20)\n!pi restart bot — Restart BanterAgent\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + redeploy\n!pi disk — Disk usage\n!pi clean — Safe cleanup (logs + cache)\n!pi network — Network status\n!pi uptime — Pi + bot uptime`;
+      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n!pi status — Full system report\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
       break;
 
     default:

@@ -27,7 +27,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
       every 5 min for nothing) — keep code in fantasy.ts for next season
 - [ ] tsc clean + commit
 
-## Phase 2 — Codebase cleanup ✅ pending
+## Phase 2 — Codebase cleanup ✅ DONE
 - [ ] Remove src/devlog.ts if unused/stale (check imports first)
 - [ ] Remove send_video.mjs (May one-off)
 - [ ] Dedupe commands: !summary (expenses vs catchup collision), !split (expenses vs
@@ -35,7 +35,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 - [ ] Prune !help to match reality; remove dead command listings
 - [ ] tsc clean + commit
 
-## Phase 3 — v2 experience: prompts + engagement (the creative core) ✅ pending
+## Phase 3 — v2 experience ✅ DONE (paati mode, detective game, morning rotation, auto-response bar)
 - [ ] prompts.ts: rewrite buildMainModePrompt — sharper Tanglish personality, current
       (post-IPL) context, better memory of group lore; drop rcb_fan mode; consider new
       mode ("thala"? "kadhal"? decide while writing)
@@ -76,3 +76,4 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 ## Status log
 - 2026-07-02 10:25 — Plan written. Starting Phase 1.
 - 2026-07-02 10:35 — Phase 1 DONE (pushed). Groups scoped, election+RCB removed, fantasy crons off, pi-scheduler restarted.
+- 2026-07-02 11:00 — Phases 2+3 DONE (pushed). Starting Phase 4 (admin observability).
