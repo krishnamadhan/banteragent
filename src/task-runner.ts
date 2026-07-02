@@ -28,6 +28,7 @@ import {
 } from "./features/fantasy.js";
 import { supabase } from "./supabase.js";
 import type { BotMessage } from "./types.js";
+import { userJid } from "./phone.js";
 
 // ── Auto-game-drop state (persistent across cron ticks within same process) ──
 let autoGameDropCount = 0;
@@ -175,9 +176,10 @@ async function taskWeeklyAwards(groupId: string) {
 }
 
 async function taskRemindersCheck(groupId: string) {
+  void groupId;
   const notifications = await checkDueReminders();
   for (const n of notifications) {
-    await sendMessage(n.isGroup ? groupId : n.phone, n.message);
+    await sendMessage(n.phone, n.message);
   }
 }
 
@@ -372,7 +374,8 @@ async function taskFantasyEnforceDeadlines(_groupId: string) {
 }
 
 async function taskPiHealthReport(groupId: string) {
-  const adminNum = process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE;
+  void groupId;
+  const adminNum = userJid(process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE);
   if (!adminNum) return;
 
   const fsMod   = await import("fs");
@@ -496,7 +499,7 @@ async function notifyAdminError(task: string, err: string): Promise<void> {
   const now = Date.now();
   if ((now - (_lastErrorDm.get(task) ?? 0)) < 60 * 60 * 1000) return;
   _lastErrorDm.set(task, now);
-  const admin = process.env.BOT_OWNER_PHONE ?? process.env.PI_ADMIN_NUMBER;
+  const admin = userJid(process.env.BOT_OWNER_PHONE ?? process.env.PI_ADMIN_NUMBER);
   if (!admin) return;
   const time = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" });
   try {

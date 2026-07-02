@@ -8,6 +8,7 @@ import { shouldAutoRespond, quickAutoRespondCheck, getGroupMode, addBotMessageTo
 import { getGroupSettings } from "./group-settings-cache.js";
 import { extractProfileInfo, getZodiacQuestion } from "./features/profiles.js";
 import { pickMeme, sendMeme } from "./features/memes.js";
+import { samePhone } from "./phone.js";
 import pkg from "whatsapp-web.js";
 const { MessageMedia } = pkg;
 
@@ -102,7 +103,7 @@ export async function handleMessage(client: any, rawMsg: any) {
 
   // Only respond to DMs from the bot owner — block all other DMs (prevents Dominos/promo loops)
   const ownerPhone = process.env.BOT_OWNER_PHONE;
-  if (!isGroup && senderPhone !== ownerPhone) return;
+  if (!isGroup && !samePhone(senderPhone, ownerPhone)) return;
 
   // Handle admin commands from owner personal chat
   if (await handleAdminCommand(client, senderPhone, isGroup, text)) return;
@@ -272,7 +273,15 @@ export async function handleMessage(client: any, rawMsg: any) {
 
     msg.text = cleanText;
     const _t0 = Date.now();
-    const { response, mentions, additionalMessages, mediaFile, mediaCaption } = await routeMessage(msg, recentMessages);
+    let routed: Awaited<ReturnType<typeof routeMessage>>;
+    try {
+      routed = await routeMessage(msg, recentMessages);
+    } catch (e) {
+      console.error("[route] command failed:", e);
+      await sendReply(client, rawMsg, "Command fail aayiduchu da. Logs-la note panniten, retry pannu.");
+      return;
+    }
+    const { response, mentions, additionalMessages, mediaFile, mediaCaption } = routed;
     const _dur = Date.now() - _t0;
     if (_dur > 3000) console.warn(`[latency] slow command "${cleanText.slice(0, 40)}" took ${_dur}ms`);
 

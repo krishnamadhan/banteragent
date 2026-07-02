@@ -4,6 +4,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
+import { samePhone } from "./phone.js";
 
 const execAsync = promisify(exec);
 const STATUS_FILE = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
@@ -12,9 +13,8 @@ const ERR_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-
 const QR_FLAG     = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
 
 function isAdmin(senderPhone: string): boolean {
-  const admin = process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE ?? "";
-  const adminNum = admin.replace(/@.*/, "");
-  return senderPhone.replace(/@.*/, "").includes(adminNum) || adminNum.includes(senderPhone.replace(/@.*/, ""));
+  return samePhone(senderPhone, process.env.PI_ADMIN_NUMBER)
+    || samePhone(senderPhone, process.env.BOT_OWNER_PHONE);
 }
 
 function readStatus(): Record<string, any> | null {

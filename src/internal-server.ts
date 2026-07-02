@@ -2,6 +2,7 @@ import http from "http";
 import { execFile } from "child_process";
 import { getClient } from "./index.js";
 import { runTask } from "./task-runner.js";
+import { configuredOwnerJid } from "./phone.js";
 import wwjs from "whatsapp-web.js";
 const { MessageMedia } = wwjs as any;
 
@@ -113,9 +114,8 @@ export function startInternalServer() {
     // Body: { message: string }  — always targets BOT_OWNER_PHONE
     if (req.method === "POST" && req.url === "/cosmo-notify") {
       try {
-        const ownerPhone = process.env.BOT_OWNER_PHONE;
-        if (!ownerPhone) { res.writeHead(503).end("no owner configured"); return; }
-        const jid = ownerPhone.includes("@") ? ownerPhone : `${ownerPhone}@c.us`;
+        const jid = configuredOwnerJid();
+        if (!jid) { res.writeHead(503).end("no owner configured"); return; }
         const body = await readBody(req);
         const { message } = JSON.parse(body);
         if (message) await getClient().sendMessage(jid, message);

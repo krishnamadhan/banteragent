@@ -6,7 +6,7 @@
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
 STATUS: active
-LAST CHECKPOINT: 2026-07-02 18:50 IST
+LAST CHECKPOINT: 2026-07-02 19:20 IST
 CURRENT OBJECTIVE: continuous-improvement loop (charter below)
 
 ---
@@ -65,6 +65,11 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] Security review: pi-admin args exact-matched/parseInt-capped; cosmo pm2 branch gated to literal start/stop; /trigger paths hardcoded; :3099 localhost-only. NO injection paths.
 - [x] Sticker picker hardened: deterministic low-cost pass first; Claude JSON output must resolve to a real candidate ID or 1-based candidate index; routine commands skip sticker picking.
 - [x] Stale Claude model IDs removed from fantasy/fitness feature calls; defaults now flow through CLAUDE_* model env vars with Haiku fallback.
+- [x] Reminder dispatch bug fixed: due group reminders now send to each reminder row's stored group_id, not the scheduler loop group.
+- [x] Owner/admin phone normalization centralized: exact bare-number comparison for BOT_OWNER_PHONE/PI_ADMIN_NUMBER and normalized @c.us outbound owner/admin DMs.
+- [x] Stale active game cleanup + loud create failures: expired rows are deactivated before lookup/create; failed game/lobby DB writes now log and surface a retry message.
+- [x] Quote persistence: quotes now lazy-load/save to data/quotes.json instead of disappearing on restart.
+- [x] Question-bank linter added: npm run lint:irfan validates /home/pi/irfan-shorts/questions_clean.json shape. Current data intentionally fails with 10 shape errors to fix in the Irfan dataset.
 - [ ] Self-review pass over v2 prompts after a few days of real group usage
 - [x] docs/FANTASY_REENABLE.md — 6-step checklist
 
@@ -116,3 +121,9 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   deterministic local match before Claude, and skips sticker matching for routine
   commands. Fantasy/fitness Claude calls no longer hardcode stale Sonnet IDs and
   default through env-overridable Haiku-class model names. Dormant until restart.
+- 2026-07-02 19:20 — Audit priority batch: fixed reminder routing to stored
+  reminder targets, centralized exact owner/admin phone matching, cleaned expired
+  game rows before lookup/create, made game DB create failures visible, moved quote
+  storage to data/quotes.json, and added scripts/lint-irfan-questions.mjs. The
+  Irfan linter currently reports 10 real shape errors in questions_clean.json; no
+  data rewrite done in this BanterAgent pass.

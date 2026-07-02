@@ -23,6 +23,7 @@ import { devlog } from "./devlog.js";
 import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
 import { handlePiAdminMessage } from "./pi-admin.js";
+import { samePhone } from "./phone.js";
 import { handleQuoteCommand } from "./features/quotes.js";
 import { handleFantasyCommand, handleWinCommand } from "./features/fantasy.js";
 import { handleSolliAdiTrigger, handleSolliAdiPredict, handleSolliAdiStatus, handleSolliAdiLeaderboard } from "./features/solli-adi.js";
@@ -474,7 +475,7 @@ Change: ${modeList}` };
     case "resetgames": {
       const ownerPhone = process.env.BOT_OWNER_PHONE;
       const senderJid = msg.from;
-      const isOwner = ownerPhone && senderJid.startsWith(ownerPhone.replace("@c.us", "").replace("@s.whatsapp.net", ""));
+      const isOwner = samePhone(senderJid, ownerPhone);
       if (!isOwner) return { response: "Only group admin can use !refreshgames da 😤" };
       const confirmArg = args[0]?.toLowerCase();
       if (confirmArg === "confirm") {

@@ -98,7 +98,7 @@ async function setReminder(args: string, msg: BotMessage): Promise<string> {
 
   const isGroup = args.trim().toLowerCase().startsWith("group");
 
-  await supabase.from("ba_reminders").insert({
+  const { error } = await supabase.from("ba_reminders").insert({
     group_id: msg.groupId,
     sender_phone: msg.from,
     sender_name: msg.senderName,
@@ -106,6 +106,10 @@ async function setReminder(args: string, msg: BotMessage): Promise<string> {
     remind_at: parsed.time.toISOString(),
     is_group_reminder: isGroup,
   });
+  if (error) {
+    console.error("[reminders] insert failed:", error.message);
+    return "Reminder save panna mudiyala da, konjam retry pannu.";
+  }
 
   // Format time for display in IST
   const istTime = parsed.time.toLocaleString("en-IN", {
@@ -156,11 +160,15 @@ export async function checkDueReminders(): Promise<
 > {
   const now = new Date().toISOString();
 
-  const { data: dueReminders } = await supabase
+  const { data: dueReminders, error } = await supabase
     .from("ba_reminders")
     .select("*")
     .eq("is_sent", false)
     .lte("remind_at", now);
+  if (error) {
+    console.error("[reminders] due query failed:", error.message);
+    return [];
+  }
 
   if (!dueReminders?.length) return [];
 

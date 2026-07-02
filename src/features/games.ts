@@ -551,7 +551,25 @@ const TRIVIA_CATEGORIES = ["Tamil Nadu rivers and lakes", "Tamil cinema golden e
 const WYR_THEMES = ["Chennai Metro commute", "Tamil IT office life", "Tamil hostel life", "IPL watching with family", "Tamil YouTube comment wars", "Ooty/Kodai trip mishaps", "Tamil engagement function drama", "Tamil New Year celebrations", "Chennai summer survival", "Tamil marriage sabha food"];
 
 // ===== Get active game for a group =====
+export async function cleanupExpiredGames(groupId?: string): Promise<number> {
+  let query = supabase
+    .from("ba_game_state")
+    .update({ is_active: false })
+    .eq("is_active", true)
+    .lte("expires_at", new Date().toISOString())
+    .select("id");
+  if (groupId) query = query.eq("group_id", groupId);
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("[games] expired cleanup failed:", error.message);
+    return 0;
+  }
+  return data?.length ?? 0;
+}
+
 export async function getActiveGame(groupId: string, gameType?: string) {
+  await cleanupExpiredGames(groupId);
   let query = supabase
     .from("ba_game_state")
     .select("*")
@@ -574,25 +592,34 @@ export async function createGame(groupId: string, gameType: string, state: objec
   if (_creatingGame.has(groupId)) return null;
   _creatingGame.add(groupId);
   try {
-  // Deactivate any existing games in this group
-  await supabase
-    .from("ba_game_state")
-    .update({ is_active: false })
-    .eq("group_id", groupId)
-    .eq("is_active", true);
+    await cleanupExpiredGames(groupId);
+    // Deactivate any existing games in this group
+    const { error: deactivateError } = await supabase
+      .from("ba_game_state")
+      .update({ is_active: false })
+      .eq("group_id", groupId)
+      .eq("is_active", true);
+    if (deactivateError) {
+      console.error("[games] deactivate failed:", deactivateError.message);
+      throw new Error("Could not clear existing game state");
+    }
 
-  const { data } = await supabase
-    .from("ba_game_state")
-    .insert({
-      group_id: groupId,
-      game_type: gameType,
-      state,
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    })
-    .select()
-    .single();
+    const { data, error } = await supabase
+      .from("ba_game_state")
+      .insert({
+        group_id: groupId,
+        game_type: gameType,
+        state,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      })
+      .select()
+      .single();
+    if (error || !data) {
+      console.error("[games] create failed:", error?.message ?? "insert returned no data");
+      throw new Error("Could not create game state");
+    }
 
-  return data;
+    return data;
   } finally {
     _creatingGame.delete(groupId);
   }
@@ -1561,19 +1588,27 @@ async function handleFastFinger(msg: BotMessage): Promise<string> {
   }
 
   // Safe to create lobby — deactivate only fastfinger-type records
-  await supabase.from("ba_game_state")
+  const { error: clearFastFingerError } = await supabase.from("ba_game_state")
     .update({ is_active: false })
     .eq("group_id", msg.groupId)
     .eq("is_active", true)
     .in("game_type", ["fastfinger", "fastfinger_lobby"]);
+  if (clearFastFingerError) {
+    console.error("[games] fastfinger cleanup failed:", clearFastFingerError.message);
+    throw new Error("Could not clear fast finger lobby");
+  }
 
-  await supabase.from("ba_game_state").insert({
+  const { error: lobbyError } = await supabase.from("ba_game_state").insert({
     group_id: msg.groupId,
     game_type: "fastfinger_lobby",
     state: { initiator: msg.from, initiatorName: msg.senderName },
     is_active: true,
     expires_at: new Date(Date.now() + 30_000).toISOString(),
   });
+  if (lobbyError) {
+    console.error("[games] fastfinger lobby create failed:", lobbyError.message);
+    throw new Error("Could not create fast finger lobby");
+  }
 
   return `⚡ *FAST FINGER LOBBY*\n\n${msg.senderName} wants to play!\nType *!ff* to join and start! 🙋\n\n⏳ Lobby closes in 30 seconds if nobody joins...`;
 }

@@ -3,6 +3,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
+import { configuredOwnerJid, samePhone } from "./phone.js";
 
 const execAsync = promisify(exec);
 
@@ -18,7 +19,8 @@ export async function handleAdminCommand(
   text: string
 ): Promise<boolean> {
   const ownerPhone = process.env.BOT_OWNER_PHONE;
-  if (isGroup || senderPhone !== ownerPhone) return false;
+  const ownerJid = configuredOwnerJid();
+  if (isGroup || !samePhone(senderPhone, ownerPhone) || !ownerJid) return false;
   if (!text.startsWith("!")) return false;
   if (text.toLowerCase().startsWith("!pi ") || text.toLowerCase() === "!pi") return false;
 
@@ -158,21 +160,21 @@ read()
 
       case "fixbugs": {
         reply = `*[Monitor]* Triggering bug fixer...`;
-        await client.sendMessage(ownerPhone!, reply);
+        await client.sendMessage(ownerJid, reply);
         execAsync("bash /home/pi/scripts/fix-bugs.sh &").catch(() => {});
         return true;
       }
 
       case "reboot": {
         reply = `*[Monitor]* Rebooting Pi in 5 seconds...`;
-        await client.sendMessage(ownerPhone!, reply);
+        await client.sendMessage(ownerJid, reply);
         setTimeout(() => execAsync("sudo reboot").catch(() => {}), 5000);
         return true;
       }
 
       case "shutdown": {
         reply = `*[Monitor]* Shutting down Pi in 5 seconds...`;
-        await client.sendMessage(ownerPhone!, reply);
+        await client.sendMessage(ownerJid, reply);
         setTimeout(() => execAsync("sudo shutdown -h now").catch(() => {}), 5000);
         return true;
       }
@@ -251,7 +253,7 @@ ${task}`;
         const preview = SESSION_CONTEXT.length > 3600
           ? SESSION_CONTEXT.slice(0, 3600) + "\n...(truncated for display)"
           : SESSION_CONTEXT;
-        await client.sendMessage(ownerPhone!, `*[Claude Session Starting]*\nTask: _${task}_\n\n*Context the session will receive:*\n\`\`\`\n${preview}\n\`\`\``);
+        await client.sendMessage(ownerJid, `*[Claude Session Starting]*\nTask: _${task}_\n\n*Context the session will receive:*\n\`\`\`\n${preview}\n\`\`\``);
 
         // Spawn Claude — runs asynchronously, sends result back when done
         const { execFile } = await import("child_process");
@@ -263,7 +265,7 @@ ${task}`;
             const output = stdout?.trim();
             if (!output) {
               const errMsg = (err?.message ?? "No output returned").slice(0, 400);
-              await client.sendMessage(ownerPhone!, `*[Claude Error]*\n${errMsg}`).catch(() => {});
+              await client.sendMessage(ownerJid, `*[Claude Error]*\n${errMsg}`).catch(() => {});
               return;
             }
             const MAX = 3800;
@@ -271,7 +273,7 @@ ${task}`;
             for (let i = 0; i < output.length; i += MAX) {
               const chunk = output.slice(i, i + MAX);
               const label = parts > 1 ? ` (${Math.floor(i / MAX) + 1}/${parts})` : "";
-              await client.sendMessage(ownerPhone!, `*[Claude Result]${label}*\n${chunk}`).catch(() => {});
+              await client.sendMessage(ownerJid, `*[Claude Result]${label}*\n${chunk}`).catch(() => {});
             }
           }
         );
@@ -320,6 +322,6 @@ ${task}`;
     reply = `*[Monitor] Error running !${cmd}*\n${err.message?.slice(0, 300)}`;
   }
 
-  await client.sendMessage(ownerPhone!, reply);
+  await client.sendMessage(ownerJid, reply);
   return true;
 }

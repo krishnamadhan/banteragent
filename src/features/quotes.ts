@@ -1,4 +1,6 @@
 import type { BotMessage } from "../types.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 
 interface Quote {
   id: number;
@@ -9,11 +11,48 @@ interface Quote {
   savedAt: number;
 }
 
-// In-memory store — lightweight, survives across messages, cleared on restart
+// Lazy-loaded file-backed store; kept in memory after first command.
+const QUOTES_FILE = join(process.cwd(), "data", "quotes.json");
 const quoteStore: Quote[] = [];
 let nextId = 1;
+let loaded = false;
+
+function loadQuotes(): void {
+  if (loaded) return;
+  loaded = true;
+  try {
+    if (!existsSync(QUOTES_FILE)) return;
+    const parsed = JSON.parse(readFileSync(QUOTES_FILE, "utf8"));
+    if (!Array.isArray(parsed)) return;
+    quoteStore.splice(0, quoteStore.length, ...parsed.filter(isQuote));
+    nextId = Math.max(0, ...quoteStore.map((q) => q.id)) + 1;
+  } catch (e) {
+    console.error("[quotes] load failed:", e);
+  }
+}
+
+function saveQuotes(): void {
+  try {
+    mkdirSync(dirname(QUOTES_FILE), { recursive: true });
+    writeFileSync(QUOTES_FILE, JSON.stringify(quoteStore, null, 2));
+  } catch (e) {
+    console.error("[quotes] save failed:", e);
+    throw new Error("Quote save failed");
+  }
+}
+
+function isQuote(value: unknown): value is Quote {
+  const q = value as Quote;
+  return Number.isInteger(q?.id)
+    && typeof q.groupId === "string"
+    && typeof q.savedBy === "string"
+    && typeof q.speakerName === "string"
+    && typeof q.text === "string"
+    && typeof q.savedAt === "number";
+}
 
 export function handleQuoteCommand(command: string, args: string, msg: BotMessage): string {
+  loadQuotes();
   switch (command) {
     case "quoteme":
     case "savequote": {
@@ -42,6 +81,13 @@ export function handleQuoteCommand(command: string, args: string, msg: BotMessag
         savedAt: Date.now(),
       };
       quoteStore.push(quote);
+      try {
+        saveQuotes();
+      } catch {
+        quoteStore.pop();
+        nextId--;
+        return "Quote save panna mudiyala da, konjam retry pannu.";
+      }
       return `✅ Quote #${quote.id} saved!\n\n💬 *"${quoteText}"*\n— ${speakerName}`;
     }
 
