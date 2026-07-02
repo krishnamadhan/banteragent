@@ -6,7 +6,7 @@
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
 STATUS: active
-LAST CHECKPOINT: 2026-07-02 13:05 IST
+LAST CHECKPOINT: 2026-07-02 15:10 IST
 CURRENT OBJECTIVE: continuous-improvement loop (charter below)
 
 ---
@@ -58,10 +58,10 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] Question pools: 305 scanned, 0 true dupes; FIXED Baasha/Padaiyappa swapped attributions + replaced duplicate variant with real Padaiyappa line
 - [x] project_banteragent.md rewritten (was 58d stale, pre-v2) · remaining stale: bspl/ipl/esp32/llm_bench/other/credentials/ipl_spec — verify on next relevant session, not blind-bumped
 - [x] devlog audited: gated behind DEV_LOG=1, localhost:4321, zero prod cost — KEEP
-- [ ] listener.ts: 3× getQuotedMessage fetches per message (perf nit)
-- [ ] pino dependency unused — remove from package.json (needs npm install; safe)
+- [x] listener.ts: quoted message fetched ONCE per handleMessage (was 3×) — dac670f
+- [x] pino removed from dependencies (console.* is the logging reality) — dac670f
 - [ ] Startup speed: measure banteragent boot→ready; lazy-import audit
-- [ ] Latency: log slow command handlers (>3s) via monitor.ts
+- [x] Latency: routeMessage timed in listener; >3s logged with [latency] tag — dac670f
 - [ ] Security: internal-server 3099 is localhost-only (OK); review !pi runSafe
       command injection surface (admin-only, but harden arg handling)
 - [ ] Self-review pass over v2 prompts after a few days of real group usage
@@ -90,3 +90,8 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - 2026-07-02 13:05 — Watchdog installed+verified; camera memory locked; UPS mock fixed
   (robot suite green 214); question pools audited (3 attribution fixes); banteragent
   memory rewritten; devlog audited. Next: pino removal, quoted-msg perf, latency logging.
+- 2026-07-02 15:10 — (watchdog resume) Landed work stranded uncommitted by session cutoff:
+  Bug #90 !skip fix + model-ID env overrides (4d84cb2, from interim session) and
+  quoted-msg single-fetch + latency log + pino removal (dac670f). tsc clean, tree clean,
+  pushed. All dormant until next banteragent restart. Next: startup-speed measurement,
+  !pi runSafe arg hardening.
