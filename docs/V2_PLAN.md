@@ -66,7 +66,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 - [ ] Update GROUPS.md (2 active groups), CLAUDE.md commands section, bugs.md sweep
 - [ ] Final report to Madhan
 
-## Phase 6 — Cosmo (separate directive, after v2)
+## Phase 6 — Cosmo ✅ DONE 2026-07-02
 - [ ] Investigate memory bloat (sudden RSS growth; RSS ~1GB, budget 500MB)
 - [ ] Camera bluish tint (sw_b 0.88 calibration seems insufficient — check tuning file
       loading + AWB gains actually applied)
@@ -78,3 +78,8 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 - 2026-07-02 10:35 — Phase 1 DONE (pushed). Groups scoped, election+RCB removed, fantasy crons off, pi-scheduler restarted.
 - 2026-07-02 11:00 — Phases 2+3 DONE (pushed). Starting Phase 4 (admin observability).
 - 2026-07-02 11:20 — Phase 4 DONE (pushed). Phase 5 docs done. banteragent v2 COMPLETE — moving to Phase 6 (Cosmo).
+- 2026-07-02 11:50 — Phase 6 DONE. Memory bloat root cause: broken torchvision → ultralytics
+  import pulled torch then failed → dead weight + silent HOG fallback. Fixed with yolo11n.onnx
+  (onnxruntime, 3 threads), torch uninstalled. Camera blue cast root cause: picamera2 RGB888
+  is BGR; double-swap shipped R/B-swapped frames. Fixed + AWB auto + neutral color.toml +
+  30fps fast path. KI-025: faces need re-enrollment. All pushed (robot repo).
