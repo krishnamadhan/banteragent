@@ -666,8 +666,8 @@ async function startBrandQuiz(msg: BotMessage): Promise<string> {
 
 // ===== CURATED DIALOGUES — hand-verified iconic lines, word-perfect =====
 const CURATED_DIALOGUES: { dialogue: string; answer: string; speaker: string; hint: string }[] = [
-  { dialogue: "Naan oru thadavai sonna, nooru thadavai sonna maadiri!", answer: "padaiyappa", speaker: "Rajinikanth", hint: "Rajini as a village man who refuses to bow down — 1999 classic" },
-  { dialogue: "En vazhi, thani vazhi!", answer: "baasha", speaker: "Rajinikanth", hint: "Rajini as an auto driver with a secret past — 1995" },
+  { dialogue: "Naan oru thadava sonna, nooru thadava sonna maadiri!", answer: "baasha", speaker: "Rajinikanth", hint: "Rajini as an auto driver with a secret past — 1995" },
+  { dialogue: "En vazhi, thani vazhi!", answer: "padaiyappa", speaker: "Rajinikanth", hint: "Rajini as a village man who refuses to bow down — 1999 classic" },
   { dialogue: "Neraya per kaadhal solluvaanga... aana, kaadhala kaadhal nu therinja, naan onnu mattum solren — idhuvum kadhuvaadhu!", answer: "kandukondain kandukondain", speaker: "Ajith Kumar", hint: "2000 Tamil adaptation of Sense and Sensibility" },
   { dialogue: "Ulagam sutrum valiban... ulagam sutrum valiban!", answer: "ulaganayagan", speaker: "Kamal Haasan", hint: "Kamal 80s action classic — he goes on a globe-trotting adventure" },
   { dialogue: "Katradhu Tamil, kettathu Tamil, pesiyadhu Tamil, padiyadhu Tamil!", answer: "vivegam", speaker: "Ajith Kumar", hint: "Ajith as an Interpol agent — 2017 action thriller" },
@@ -697,7 +697,7 @@ const CURATED_DIALOGUES: { dialogue: string; answer: string; speaker: string; hi
   { dialogue: "Naan yaar? Yaar naan? Enna vazhippadu solluvom.", answer: "dasavathaaram", speaker: "Kamal Haasan", hint: "Kamal plays 10 roles — 2008 big-budget film" },
   { dialogue: "En vazhi, yen kaathal, yen vaazhkai — yellaamey un kayyile!", answer: "kadhal kondein", speaker: "Selvam (Dhanush)", hint: "Selvaraghavan direction, Dhanush debut in intense role — 2003" },
   { dialogue: "Idhu kaalamum marandhu poachu, naan marandhu pogala!", answer: "ok kanmani", speaker: "Aadi (Dulquer Salmaan)", hint: "Mani Ratnam's modern live-in relationship film — 2015" },
-  { dialogue: "Thadava sollamatten, oru thadava sonna thaan, oru nooru thadava sonna maadiri!", answer: "padaiyappa", speaker: "Rajinikanth", hint: "Different Rajini dialogue from the same iconic 1999 film" },
+  { dialogue: "Adhigama aasai padra ambalaiyum, adhigama kovapadra pombalaiyum nalla vazhndhadhu sarithiramae kidaiyaadhu!", answer: "padaiyappa", speaker: "Rajinikanth", hint: "Rajini's philosophy line from the iconic 1999 film" },
   { dialogue: "Aambala manasu arasamaram maari — aneyaanga adi padudhukku mela mathrika maatom!", answer: "aambala", speaker: "Vishal", hint: "Vishal action comedy — 2015" },
   { dialogue: "Naan vanthutten!", answer: "kaththi", speaker: "Vijay", hint: "Vijay's iconic entry dialogue — 2014 mass entertainer" },
   { dialogue: "Yenga ooru Madurai!", answer: "kaithi", speaker: "Dilli (Karthi)", hint: "Karthi as an ex-convict in one non-stop night — 2019 Lokesh Kanagaraj" },

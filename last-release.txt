@@ -1,5 +1,15 @@
-🐛 *Bug Fix* — !fantasy join now always shows today's match
+🚀 *BANTER AGENT v2 RELEASED DA!* 🚀
 
-Fixed: `!fantasy join` was showing yesterday's SRH vs CSK contest instead of today's new matches. The bot was treating any unfinished match as "active" even when it was 17+ hours old. Now stale matches (>8h past start) are auto-closed and today's contests show correctly.
+Bot-ku full makeover — pudhu features paarunga:
 
-Also new today: !song, !wordle, !memory games — try them!
+👵 *!mode paati* — Group-ku sondha paati vandhutaanga! Scolding + love + "saaptiya?" energy. Try pannunga, adichu correct pannuvanga.
+
+🕵️ *!detective* — NEW GAME! Petty crime nadandhirchu... 3 suspects, oru liar. Sharp eye-ku 15 points. CBI da!
+
+🌅 *Morning messages* — ini daily same template illa. Monday breaking news, Wednesday movie trailer, Sunday sermon... 7 days 7 vibes.
+
+🤖 Bot ipo konjam quiet-a irukum — but open pannumbodhu punchline guarantee. Quality > quantity da.
+
+🧹 IPL fantasy season mudinjadhu-nala rest la irukku — next season full power return.
+
+Ellam try panni feedback sollunga! Bug irundha *!bug <problem>* 🐛
