@@ -13,50 +13,33 @@ Adding a new group requires changes to **only two files** — `.env` and `group-
 
 ## Active Groups
 
-### Group 1 — Main Tamil Banter Group
+> **v2 (2026-07-02): only TWO groups are active.** Fantasy League and Inuma Expenses
+> are `disabled: true` in group-config.ts (registry entries kept — re-enable by
+> deleting one line). Election + RCB temp features removed entirely.
+
+### Group 1 — Banter Squad (main, v2 experience)
 | Field | Value |
 |-------|-------|
 | Env var | `BOT_GROUP_ID` |
-| JID | `120363399878677641@g.us` |
-| Name | Banter Squad |
 | Default mode | `nanban` |
-| Available modes | `roast`, `nanban`, `peter` |
-| Disabled commands | none |
-| Disabled tasks | none |
+| Modes | `roast`, `nanban`, `peter`, `paati` 👵 (new in v2) |
+| Disabled commands | fantasy, f11, fl, win (IPL off-season) |
 | Prompt builder | `buildMainModePrompt()` |
 
-**Modes:**
-- `roast` — Savage Chennai humour, Tanglish, lovingly roasts members
-- `nanban` — Warm supportive friend energy, no roasting
-- `peter` — Broken Tamil-accented English, TEDx-in-WhatsApp energy
+v2 highlights: !detective game (petty-crime mysteries), 7 rotating morning formats,
+high-bar auto-response (punchline-only interjections), paati mode.
 
----
-
-### Group 2 — IPL Fantasy Tamil Group
+### Group 2 — Tiruvannamalai Construction Tracker (untouched by v2)
 | Field | Value |
 |-------|-------|
-| Env var | `BOT_GROUP2_ID` |
-| JID | `120363424669447247@g.us` |
-| Name | Fantasy league🏏 |
-| Default mode | `serious` |
-| Available modes | `serious`, `roast` |
-| Prompt builder | `buildIplModePrompt()` |
+| Env var | `BOT_CONSTRUCTION_GROUP_ID` |
+| Commands | !fund !add !contri !approve !delete !summary !bal !history !report |
 
-**Modes:**
-- `serious` — Factual cricket bot. Scores, standings, stats only. No jokes.
-- `roast` — Slightly vulgar cricket-only roasting (kuthu song energy). NO personal life jokes.
-
-**Disabled commands:** `!ship`, `!dare`, `!gossip`, `!myinfo`, `!pushup`, `!fitboard`,
-`!roastbattle`, `!astro`, `!dialect`, `!character`, `!wyr`, `!2t1l`
-
-**Disabled tasks:** All admin/processing tasks (see below), plus horoscope, word-of-day,
-history, movie-fact, finance-update, weekly-awards, weekend-prompt, monthly-recap,
-weekly-score-reset, auto-game-drop, morning-roast, birthday-check.
-
-**Enabled tasks:** cricket-alerts, fantasy-leaderboard, fantasy-prematch-1530,
-fantasy-prematch-1930, fantasy-morning-winners, news-morning, reminders-check.
-
----
+### Disabled (kept in registry)
+- **Fantasy league🏏** (`BOT_GROUP2_ID`) — IPL season over; fantasy crons also
+  commented out in pi-scheduler. Re-enable both next season.
+- **Inuma Expenses** (`BOT_EXPENSES_GROUP_ID`) — disabled per v2 "all other groups"
+  directive; delete `disabled: true` to restore.
 
 ## Architecture
 

@@ -53,7 +53,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
       (roast/appreciation/throwback/prediction); retire weekend-prompt if stale
 - [ ] tsc clean + commit (may be several commits)
 
-## Phase 4 — Admin: observability + Pi/Cosmo control ✅ pending
+## Phase 4 — Admin observability ✅ DONE
 - [ ] !pi: add `backup` (last nightly-backup status), `disk`, `top`, `uptime`, `net`
       (tailscale status), consolidated `!pi health` one-shot dashboard
 - [ ] !pi checks — routine check runner: pm2 status, disk, temp, backup age, log errors
@@ -62,7 +62,7 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 - [ ] Wire pi-monitor alert → owner DM when backup missing >48h (config.json has hooks?)
 - [ ] tsc clean + commit
 
-## Phase 5 — Docs + wrap ✅ pending
+## Phase 5 — Docs + wrap ✅ DONE
 - [ ] Update GROUPS.md (2 active groups), CLAUDE.md commands section, bugs.md sweep
 - [ ] Final report to Madhan
 
@@ -77,3 +77,4 @@ After banteragent v2 → Cosmo phase: memory bloat + bluish camera (separate pla
 - 2026-07-02 10:25 — Plan written. Starting Phase 1.
 - 2026-07-02 10:35 — Phase 1 DONE (pushed). Groups scoped, election+RCB removed, fantasy crons off, pi-scheduler restarted.
 - 2026-07-02 11:00 — Phases 2+3 DONE (pushed). Starting Phase 4 (admin observability).
+- 2026-07-02 11:20 — Phase 4 DONE (pushed). Phase 5 docs done. banteragent v2 COMPLETE — moving to Phase 6 (Cosmo).
