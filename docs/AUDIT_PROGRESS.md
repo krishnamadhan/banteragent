@@ -60,12 +60,11 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] devlog audited: gated behind DEV_LOG=1, localhost:4321, zero prod cost — KEEP
 - [x] listener.ts: quoted message fetched ONCE per handleMessage (was 3×) — dac670f
 - [x] pino removed from dependencies (console.* is the logging reality) — dac670f
-- [ ] Startup speed: measure banteragent boot→ready; lazy-import audit
+- [x] Startup speed: 5s process→WhatsApp-connected (14:22 restart logs) — no action needed
 - [x] Latency: routeMessage timed in listener; >3s logged with [latency] tag — dac670f
-- [ ] Security: internal-server 3099 is localhost-only (OK); review !pi runSafe
-      command injection surface (admin-only, but harden arg handling)
+- [x] Security review: pi-admin args exact-matched/parseInt-capped; cosmo pm2 branch gated to literal start/stop; /trigger paths hardcoded; :3099 localhost-only. NO injection paths.
 - [ ] Self-review pass over v2 prompts after a few days of real group usage
-- [ ] IPL fantasy re-enable checklist for next season (doc)
+- [x] docs/FANTASY_REENABLE.md — 6-step checklist
 
 ## Known issues / constraints
 
@@ -73,7 +72,7 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - Cosmo RSS 837MB vs 500MB budget: legit residency (whisper base.en ~200MB).
   Levers: tiny.en (worse STT) or FER-5 emotion (ADR-014). Awaiting Madhan call.
 - KI-025: face re-enrollment needs Madhan+Indhu present.
-- Robot unit suite: 2 UPS-mock failures pre-existing (fix queued above).
+- (resolved) Robot unit suite green: 214 passed.
 
 ## Restart instructions (for a fresh session)
 
@@ -95,3 +94,7 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   quoted-msg single-fetch + latency log + pino removal (dac670f). tsc clean, tree clean,
   pushed. All dormant until next banteragent restart. Next: startup-speed measurement,
   !pi runSafe arg hardening.
+- 2026-07-02 14:45 — Perf (quoted-msg, latency log, pino), Bug #90 (!skip, other stream),
+  startup measured (5s, fine), security review clean, FANTASY_REENABLE.md. All initial
+  charter pending items DONE. Remaining continuous-improvement: prompt self-review after
+  real usage (queued for +3 days), Cosmo RSS budget decision (Madhan), face re-enroll.
