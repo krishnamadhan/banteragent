@@ -50,6 +50,7 @@ export interface GroupConfig {
   buildPrompt: (mode: string) => string;
   isExpenseGroup?: boolean;       // expense tracker group — different routing
   isConstructionGroup?: boolean;  // construction project fund tracker
+  disabled?: boolean;             // bot fully ignores this group (v2: only Banter Squad + Construction active)
 }
 
 function resolveId(envKey: string): string {
@@ -75,15 +76,16 @@ const REGISTRY: GroupConfig[] = [
       roast:   { description: "🔥 ROAST MODE — Default. Savage lovingly." },
       nanban:  { description: "🤝 NANBAN MODE — Warm nanban energy. Pure support, zero roast." },
       peter:   { description: "🎓 PETER MODE — Broken English, over-explains everything, very much sophisticated itself." },
-      rcb_fan: { description: "🔴 RCB FAN MODE — Unhinged superstitious RCB fan energy. Finals day only." },
     },
     disabledCommands: new Set<string>(),
     disabledTasks:    new Set<string>(["horoscope"]),
     buildPrompt: buildMainModePrompt,
   },
 
-  // ── IPL Fantasy Tamil Group ───────────────────────────────────────────────────
+  // ── IPL Fantasy Tamil Group — DISABLED 2026-07-02 (v2: season over) ──────────
+  // Re-enable next season: delete the `disabled` line.
   {
+    disabled: true,
     groupId: resolveId("BOT_GROUP2_ID"),
     name: "IPL Tamil Group",
     defaultMode: "serious",
@@ -116,8 +118,10 @@ const REGISTRY: GroupConfig[] = [
     buildPrompt: buildIplModePrompt,
   },
 
-  // ── Inuma Expenses Tracker ────────────────────────────────────────────────────
+  // ── Inuma Expenses Tracker — DISABLED 2026-07-02 (v2 directive: "all other
+  // groups"). Re-enable: delete the `disabled` line. ────────────────────────────
   {
+    disabled: true,
     groupId: resolveId("BOT_EXPENSES_GROUP_ID"),
     name: "Inuma Expenses",
     defaultMode: "default",
@@ -175,7 +179,7 @@ export function getGroupConfig(groupId: string): GroupConfig {
       cfg.groupId = live["BOT_EXPENSES_GROUP_ID"] ?? "";
     }
   }
-  return REGISTRY.find(c => c.groupId && c.groupId === groupId) ?? FALLBACK;
+  return REGISTRY.find(c => !c.disabled && c.groupId && c.groupId === groupId) ?? FALLBACK;
 }
 
 // Returns all configured group JIDs (non-empty only).
@@ -186,5 +190,5 @@ export function getAllGroupIds(): string[] {
     if (!cfg.groupId && cfg.isConstructionGroup) cfg.groupId = live["BOT_CONSTRUCTION_GROUP_ID"] ?? "";
     if (!cfg.groupId && cfg.isExpenseGroup)     cfg.groupId = live["BOT_EXPENSES_GROUP_ID"]     ?? "";
   }
-  return REGISTRY.map(c => c.groupId).filter(Boolean);
+  return REGISTRY.filter(c => !c.disabled).map(c => c.groupId).filter(Boolean);
 }

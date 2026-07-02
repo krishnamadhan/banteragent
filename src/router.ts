@@ -178,7 +178,6 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !myinfo show
 
 🎉 *Fun:*
-  !jinx — RCB Anti-Jinx meme (Finals special 🔴)
   !roast <name> — Savage roast
   !roastbattle (!rb) PersonA vs PersonB — Epic roast battle
   !roastmetaai — Mock that useless Meta AI
@@ -292,23 +291,6 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "cricket":
       return handleCricketCommand(args, msg);
 
-    // TN Election commands (one-day feature)
-    case "tnlist": {
-      const { callElectionBot } = await import("./features/election.js");
-      return { response: await callElectionBot("list") };
-    }
-
-    case "tn": {
-      const { callElectionBot } = await import("./features/election.js");
-      // !tn consti 63  or  !tn 63
-      const constMatch = args.trim().match(/^consti\s+(\d+)$|^(\d+)$/i);
-      if (constMatch) {
-        const num = constMatch[1] || constMatch[2];
-        return { response: await callElectionBot("consti", { num }) };
-      }
-      return { response: await callElectionBot("trigger") };
-    }
-
     // Polls
     case "poll":
     case "vote":
@@ -405,32 +387,6 @@ Change: ${modeList}` };
     case "quote":
     case "quoteboard":
       return { response: handleQuoteCommand(command, args, msg) };
-
-    // RCB Anti-Jinx memes
-    case "jinx":
-    case "antijinx": {
-      const JINX_DIR = resolve("/home/pi/banteragent/memes/jinx");
-      const EXTS = [".jpg", ".jpeg", ".png", ".webp"];
-      let files: string[] = [];
-      if (existsSync(JINX_DIR)) {
-        files = readdirSync(JINX_DIR)
-          .filter((f) => EXTS.some((e) => f.toLowerCase().endsWith(e)))
-          .map((f) => resolve(JINX_DIR, f));
-      }
-      if (!files.length) {
-        return { response: "🛡️ Anti-jinx shields activate aaguthu! (Machi, add images to memes/jinx/ folder first 😅)" };
-      }
-      const pick = files[Math.floor(Math.random() * files.length)]!;
-      const captions = [
-        "🛡️ RCB Anti-Jinx activated! Jinx-ku vera chance illai! 🔥",
-        "⚡ THAAD deployed! No jinx can touch us today! RCB 🔴",
-        "🧴 Anti-Jinx spray spreading... Ee saari RCB thokkum! 💪",
-        "🏹 Brahmastra release aaguthu! Jinx neutralized! EE SAALA CUP NAMDE! 🏆",
-        "☢️ Nuclear anti-jinx mode: ON. GT-ku chance illai! 🚀",
-      ];
-      const caption = captions[Math.floor(Math.random() * captions.length)]!;
-      return { response: "", mediaFile: pick, mediaCaption: caption };
-    }
 
     // Fun
     case "movie":

@@ -13,7 +13,6 @@ import { generateBirthdayWish, generateWordOfDay } from "./features/fun.js";
 import { generateAwards, getMonthlyRecapStats } from "./features/analytics.js";
 import { checkDueReminders } from "./features/reminders.js";
 import { checkCricketUpdates } from "./features/cricket.js";
-import { rcbFinalsCommentary } from "./features/rcb-finals.js";
 import { scheduledNewsDrop } from "./features/news.js";
 import { handleGameCommand } from "./features/games.js";
 import {
@@ -362,14 +361,6 @@ async function taskFantasyEnforceDeadlines(_groupId: string) {
   await enforceDeadlines();
 }
 
-async function taskRcbFinalsLive(groupId: string) {
-  const msg = await rcbFinalsCommentary();
-  if (msg) {
-    await sendMessage(groupId, msg);
-    addBotMessageToHistory(groupId, msg);
-  }
-}
-
 async function taskPiHealthReport(groupId: string) {
   const adminNum = process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE;
   if (!adminNum) return;
@@ -460,7 +451,6 @@ const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
   "fantasy-leaderboard":     taskFantasyLeaderboard,
   "fantasy-enforce-deadlines": taskFantasyEnforceDeadlines,
   "pi-health-report":        taskPiHealthReport,
-  "rcb-finals-live":         taskRcbFinalsLive,
 };
 
 // Tracks whether sendMessage was called during the current task
