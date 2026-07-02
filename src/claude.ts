@@ -32,8 +32,8 @@ if (process.env.DEV_LOG === "1") startDevServer();
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
-const MODEL = "claude-sonnet-4-20250514";
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001";
+const MODEL = process.env.CLAUDE_CHAT_MODEL || HAIKU_MODEL;
 
 // BASE_SYSTEM_PROMPT for non-chat uses — function so date is fresh on each call
 function getBaseSystemPrompt(): string { return buildMainModePrompt("roast"); }

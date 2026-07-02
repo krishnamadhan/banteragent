@@ -2179,3 +2179,23 @@ Last spot → Slot 2 → *Anjaan* (auto-placed)
 
 ---
 
+## Bug #90 — 2026-07-02 14:09:15 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** what the hell is this
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: !top10
+  [Bot]: Dei, *wyr* already running da! Finish pannunga first 😤
+(!next to advance, !skip to abandon)
+  [Krishna Madhan]: !skip
+  [Bot]: Machaan, server-la signal illai. Konjam wait pannunga.
+  [Krishna Madhan]: !bug what the hell is this
+```
+
+**Fix notes:** Root cause — active-game messages told users to use `!skip`, but `!skip` was not routed anywhere. It fell through to default chat, which then hit the Claude API. That exposed a second issue: chat/image paths hardcoded the unavailable `claude-sonnet-4-20250514`, causing the generic "server-la signal illai" fallback. Fixed by adding `!skip`/`!abandon` to deactivate the current active game, and changed chat/image default to cheap `claude-haiku-4-5-20251001` via env-overridable `CLAUDE_CHAT_MODEL`/`CLAUDE_HAIKU_MODEL`. Deploy: restart bot.
+
+---
+

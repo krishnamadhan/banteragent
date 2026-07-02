@@ -1,15 +1,10 @@
-🚀 *BANTER AGENT v2 RELEASED DA!* 🚀
+??? *Bug Fix Deployed*
 
-Bot-ku full makeover — pudhu features paarunga:
+Fixed the !skip issue from Bug #90.
 
-👵 *!mode paati* — Group-ku sondha paati vandhutaanga! Scolding + love + "saaptiya?" energy. Try pannunga, adichu correct pannuvanga.
+What changed:
+? !skip / !abandon now properly clears the active game instead of falling into chat.
+? Cleared the stuck WYR game that blocked !top10.
+? Bot chat now uses cheaper Haiku by default, so Claude calls stay cost-friendly.
 
-🕵️ *!detective* — NEW GAME! Petty crime nadandhirchu... 3 suspects, oru liar. Sharp eye-ku 15 points. CBI da!
-
-🌅 *Morning messages* — ini daily same template illa. Monday breaking news, Wednesday movie trailer, Sunday sermon... 7 days 7 vibes.
-
-🤖 Bot ipo konjam quiet-a irukum — but open pannumbodhu punchline guarantee. Quality > quantity da.
-
-🧹 IPL fantasy season mudinjadhu-nala rest la irukku — next season full power return.
-
-Ellam try panni feedback sollunga! Bug irundha *!bug <problem>* 🐛
+Try: !top10 or !skip next time a game gets stuck.

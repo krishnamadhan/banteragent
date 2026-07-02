@@ -598,6 +598,27 @@ export async function createGame(groupId: string, gameType: string, state: objec
   }
 }
 
+export async function skipActiveGame(groupId: string): Promise<string> {
+  const game = await getActiveGame(groupId);
+  if (!game) return "Active game onnum illa da. Start pannalaam: *!quiz*, *!wyr*, or *!top10*.";
+
+  const label = game.game_type === "bantervs" ? "Battle"
+    : game.game_type === "bankerrank" ? "Top 10 Ranking"
+    : game.game_type.toUpperCase();
+
+  const { error } = await supabase
+    .from("ba_game_state")
+    .update({ is_active: false })
+    .eq("id", game.id);
+
+  if (error) {
+    console.error("[games] skip failed:", error.message);
+    return "Skip panna mudiyala da, konjam retry pannu.";
+  }
+
+  return `Done: *${label}* abandoned. Fresh game start pannunga.`;
+}
+
 // ===== Award points =====
 export async function awardPoints(
   groupId: string,
@@ -2160,6 +2181,10 @@ export async function handleGameCommand(
       break;
     case "answer":
       response = await handleAnswer(args, msg);
+      break;
+    case "skip":
+    case "abandon":
+      response = await skipActiveGame(msg.groupId);
       break;
     case "score":
       response = await getLeaderboard(

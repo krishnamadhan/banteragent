@@ -1,7 +1,7 @@
 import type { BotMessage, CommandResult } from "./types.js";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
 import { getGroupConfig } from "./group-config.js";
-import { handleGameCommand, clearGroupArchive, getArchiveStats } from "./features/games.js";
+import { handleGameCommand, clearGroupArchive, getArchiveStats, skipActiveGame } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
 import { handleStatsCommand } from "./features/analytics.js";
@@ -273,6 +273,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
       return { response: await startTop10(msg, args) };
     case "next":
       return { response: await handlePicksNext(msg, args) };
+    case "skip":
+    case "abandon":
+      return { response: await skipActiveGame(msg.groupId) };
 
     // Cricket
     case "cricket":
