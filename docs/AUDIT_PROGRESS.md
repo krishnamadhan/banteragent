@@ -98,3 +98,8 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   startup measured (5s, fine), security review clean, FANTASY_REENABLE.md. All initial
   charter pending items DONE. Remaining continuous-improvement: prompt self-review after
   real usage (queued for +3 days), Cosmo RSS budget decision (Madhan), face re-enroll.
+- 2026-07-02 15:05 — Watchdog hardened after self-review: explicit PATH/HOME for cron
+  env; fresh-session fallback when `-c` resume is unusable (AUDIT_PROGRESS + memory
+  carry enough context without conversation history). VERIFIED: headless spawn under
+  cron-equivalent env (`env -i`) returned WATCHDOG-SPAWN-OK. Untestable until a real
+  limit: the -c path against a limit-stuck conversation — covered by the fallback.
