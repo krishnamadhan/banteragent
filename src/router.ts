@@ -541,6 +541,22 @@ Change: ${modeList}` };
       const a = args.trim().toLowerCase().split(/\s+/);
       const sub = a[0] || "";
 
+      // Calibrate the TV zone — user shows a full-red screen, we find the TV rectangle
+      if (sub === "calibrate" || sub === "cal") {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 12000);
+          const r = await fetch(`http://127.0.0.1:8000/led/calibrate`, {
+            method: "POST", headers, signal: ctrl.signal });
+          clearTimeout(t);
+          const j: any = await r.json().catch(() => ({}));
+          if (r.ok) return { response: `🎯 Calibrated! TV zone locked. Now *!led tv on* to sync.\n(zone: ${JSON.stringify(j.roi)})` };
+          return { response: `🎯 ${j.error || `failed (${r.status})`}` };
+        } catch {
+          return { response: "🎯 Couldn't reach Cosmo (:8000). Is cosmo up?" };
+        }
+      }
+
       // TV ambilight mode — camera samples the TV, strip follows the colour
       if (sub === "tv" || sub === "ambilight" || sub === "sync") {
         const on = !(a[1] === "off" || a[1] === "stop" || a[1] === "0");
