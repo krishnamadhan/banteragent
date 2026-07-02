@@ -5,9 +5,20 @@
 > Watchdog: `~/scripts/claude-resume-watchdog.sh` (cron */30) auto-resumes when
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
-STATUS: active
-LAST CHECKPOINT: 2026-07-03 02:35 IST
-CURRENT OBJECTIVE: continuous-improvement loop (charter below)
+STATUS: idle
+LAST CHECKPOINT: 2026-07-03 03:35 IST
+CURRENT OBJECTIVE: caught up — watchdog stood down (see note)
+
+> **WHY IDLE (2026-07-03 03:35):** The autonomous loop has completed every safely-
+> actionable item. Both remaining Pending items are GATED, not skipped:
+>   1. Usage-data prompt tuning — needs live group logs; revisit ~2026-07-06.
+>   2. recentMessages per-group refactor — needs SUPERVISED live-bot testing.
+> Rather than spawn a full session every hour to conclude "nothing to do" (burning
+> the 6/day cap + tokens), STATUS is `idle` so the watchdog stands down cleanly.
+> **TO RESUME:** set `STATUS: active` when (a) it's ~2026-07-06 and logs exist, or
+> (b) you start a supervised session for the recentMessages fix, or (c) new work is
+> queued below. Usage-limit recovery still works: a session that hits a limit sets
+> `STATUS: paused-limit` itself, which the watchdog also acts on.
 
 ---
 
@@ -151,3 +162,10 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   docs/STATE.md (was falsely claiming cosmo REMOVED / LED API down / ambilight inactive —
   cosmo is online with led_service + fully colour-calibrated ambilight). Pushed to robot
   repo. banteragent tree untouched this run.
+- 2026-07-03 03:35 — (watchdog resume #4) Autonomous loop CAUGHT UP. Both remaining
+  Pending items are gated (usage-tuning needs data ~2026-07-06; recentMessages needs
+  supervised testing) — neither is safe/appropriate for an unattended run. Rather than
+  fabricate work or rush the refactor, set STATUS: idle so the watchdog stands down
+  (it was spawning hourly, 3/6 daily cap, each concluding "nothing to do" — wasteful).
+  Fully reversible: flip STATUS: active to resume. Usage-limit recovery unaffected
+  (paused-limit path still honored). No code touched this run.
