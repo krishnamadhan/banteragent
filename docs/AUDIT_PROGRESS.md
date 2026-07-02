@@ -6,7 +6,7 @@
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
 STATUS: active
-LAST CHECKPOINT: 2026-07-02 19:20 IST
+LAST CHECKPOINT: 2026-07-03 01:35 IST
 CURRENT OBJECTIVE: continuous-improvement loop (charter below)
 
 ---
@@ -70,8 +70,12 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] Stale active game cleanup + loud create failures: expired rows are deactivated before lookup/create; failed game/lobby DB writes now log and surface a retry message.
 - [x] Quote persistence: quotes now lazy-load/save to data/quotes.json instead of disappearing on restart.
 - [x] Question-bank linter added: npm run lint:irfan validates /home/pi/irfan-shorts/questions_clean.json shape. Current data intentionally fails with 10 shape errors to fix in the Irfan dataset.
-- [ ] Self-review pass over v2 prompts after a few days of real group usage
+- [x] Self-review pass over v2 prompt TEXT (quality/consistency) — found + fixed: peter
+      mode had NO safety rules (omitted sharedRules); split safetyRules() from style so
+      every mode carries the caste/religion/gender + politics + cricket + game guards.
 - [x] docs/FANTASY_REENABLE.md — 6-step checklist
+- [ ] Usage-data-driven prompt tuning — revisit ~2026-07-06 after real group logs
+      accumulate (tone calibration, auto-response hit rate). Deferred: needs live data.
 
 ## Known issues / constraints
 
@@ -127,3 +131,10 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   storage to data/quotes.json, and added scripts/lint-irfan-questions.mjs. The
   Irfan linter currently reports 10 real shape errors in questions_clean.json; no
   data rewrite done in this BanterAgent pass.
+- 2026-07-03 01:35 — (watchdog resume) v2 prompt self-review (text/quality pass). Found
+  peter mode carried ZERO safety rules — it omits sharedRules() because its broken-English
+  identity contradicts Tanglish-only, but that also dropped the caste/religion/gender +
+  politics + cricket-score + stateful-game guards. Split safetyRules() (universal) from
+  sharedRules() (Tanglish style); all 4 modes now verified to include the safety floor.
+  tsc clean, committed, pushed. Dormant until banteragent restart. Usage-data-driven tuning
+  re-queued for ~2026-07-06 (needs live logs). No other Pending items remain actionable now.
