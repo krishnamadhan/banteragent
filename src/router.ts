@@ -529,6 +529,45 @@ Change: ${modeList}` };
       return handleSolliAdiPredict(msg, args);
     }
 
+    case "led":
+    case "lights":
+    case "light": {
+      // Owner DM only (listener gates DMs to BOT_OWNER_PHONE).
+      if (msg.isGroup) return { response: "" };
+      const robotToken = process.env.ROBOT_API_TOKEN || "";
+      const headers: Record<string, string> = robotToken
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${robotToken}` }
+        : { "Content-Type": "application/json" };
+      const a = args.trim().toLowerCase().split(/\s+/);
+      const sub = a[0] || "";
+
+      let body: { cmd: string; value?: any } | null = null;
+      if (sub === "off" || sub === "on") body = { cmd: sub };
+      else if (sub === "bright" || sub === "brightness") body = { cmd: "bright", value: parseInt(a[1] || "100") };
+      else if (/^\d+ \d+ \d+$/.test(a.join(" "))) body = { cmd: "color", value: [ +a[0], +a[1], +a[2] ] };
+      else if (sub) body = { cmd: "named", value: sub };
+
+      if (!body) {
+        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB" };
+      }
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 16000); // BLE scan+connect can take ~12s
+        const r = await fetch(`http://127.0.0.1:8000/led`, {
+          method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        const j: any = await r.json().catch(() => ({}));
+        if (r.ok) {
+          const st = j.on ? `on · ${j.brightness}%` : "off";
+          return { response: `💡 Done — strip ${st}` };
+        }
+        return { response: `💡 ${j.error || `failed (${r.status})`}` };
+      } catch {
+        return { response: "💡 Couldn't reach Cosmo (LED runs through the robot API on :8000). Is cosmo up? !pi status" };
+      }
+    }
+
     case "cosmo": {
       // DM-only; listener already gates DMs to BOT_OWNER_PHONE → owner path.
       if (msg.isGroup) return { response: "" };
