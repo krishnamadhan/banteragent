@@ -30,6 +30,11 @@ import { monApiCall } from "../monitor.js";
 
 // Dedicated Claude client for fantasy team picking (needs higher token budget)
 const _fantasyClaude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const FANTASY_MODEL =
+  process.env.CLAUDE_FANTASY_MODEL ||
+  process.env.CLAUDE_CHAT_MODEL ||
+  process.env.CLAUDE_HAIKU_MODEL ||
+  "claude-haiku-4-5-20251001";
 
 const SCORING_RULES = `
 DREAM11 FANTASY SCORING (T20):
@@ -200,7 +205,7 @@ Return ONLY this JSON (no extra text):
 
   try {
     const resp = await _fantasyClaude.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: FANTASY_MODEL,
       max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });

@@ -6,7 +6,7 @@
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
 STATUS: active
-LAST CHECKPOINT: 2026-07-02 15:10 IST
+LAST CHECKPOINT: 2026-07-02 18:50 IST
 CURRENT OBJECTIVE: continuous-improvement loop (charter below)
 
 ---
@@ -63,6 +63,8 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] Startup speed: 5s process→WhatsApp-connected (14:22 restart logs) — no action needed
 - [x] Latency: routeMessage timed in listener; >3s logged with [latency] tag — dac670f
 - [x] Security review: pi-admin args exact-matched/parseInt-capped; cosmo pm2 branch gated to literal start/stop; /trigger paths hardcoded; :3099 localhost-only. NO injection paths.
+- [x] Sticker picker hardened: deterministic low-cost pass first; Claude JSON output must resolve to a real candidate ID or 1-based candidate index; routine commands skip sticker picking.
+- [x] Stale Claude model IDs removed from fantasy/fitness feature calls; defaults now flow through CLAUDE_* model env vars with Haiku fallback.
 - [ ] Self-review pass over v2 prompts after a few days of real group usage
 - [x] docs/FANTASY_REENABLE.md — 6-step checklist
 
@@ -109,3 +111,8 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   only matched "usage limit". FIXED: broadened regex (verified vs real message), parse
   exact reset time from error → wake 5 min after reset (verified: "2:40pm"→14:40),
   limit hits no longer consume the daily spawn cap.
+- 2026-07-02 18:50 — BanterAgent audit follow-up: sticker selection now validates
+  Claude output against actual candidates (including numeric list choices), uses a
+  deterministic local match before Claude, and skips sticker matching for routine
+  commands. Fantasy/fitness Claude calls no longer hardcode stale Sonnet IDs and
+  default through env-overridable Haiku-class model names. Dormant until restart.

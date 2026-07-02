@@ -46,6 +46,12 @@ function cached(text: string): Array<{ type: "text"; text: string; cache_control
 
 const STRUCTURED_PROMPT = `You generate content for a Tamil WhatsApp group bot. Follow the requested format EXACTLY. Do not add extra commentary or deviate from the format. When the format says Tanglish, write Tamil in English alphabets.`;
 
+const STICKER_MATCH_WORDS = [
+  "haha", "laugh", "funny", "roast", "angry", "sad", "cry", "happy", "dance",
+  "shock", "surprise", "judge", "facepalm", "love", "confused", "serious",
+  "smile", "excited", "frustration", "disbelief", "calm",
+];
+
 // In-memory conversation history per group
 const groupHistory = new Map<string, Array<{ role: "user" | "assistant"; content: string }>>();
 const MAX_HISTORY = 8;
@@ -430,6 +436,10 @@ export async function pickStickerForContext(
   stickers: Array<{ id: string; description: string; when_to_use: string }>
 ): Promise<string | null> {
   if (stickers.length === 0) return null;
+  const candidateIds = new Set(stickers.map((s) => s.id));
+
+  const deterministic = pickStickerDeterministically(responseText, stickers);
+  if (deterministic) return deterministic;
 
   const stickerList = stickers
     .map((s, i) => `${i + 1}. [${s.id}] ${s.description} — use when: ${s.when_to_use}`)
@@ -455,10 +465,48 @@ Reply with JSON only: {"id": "<sticker_id>"} or {"id": null} if none fits.`;
     });
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
     const parsed = JSON.parse(raw.replace(/^```json\n?|```$/g, "").trim());
-    return parsed.id ?? null;
+    return normalizeStickerChoice(parsed.id, stickers, candidateIds);
   } catch {
     return null;
   }
+}
+
+function normalizeStickerChoice(
+  rawId: unknown,
+  stickers: Array<{ id: string }>,
+  candidateIds: Set<string> = new Set(stickers.map((s) => s.id))
+): string | null {
+  if (rawId == null) return null;
+  const raw = String(rawId).trim();
+  if (!raw || raw.toLowerCase() === "null" || raw.toLowerCase() === "none") return null;
+  if (candidateIds.has(raw)) return raw;
+
+  const index = Number.parseInt(raw, 10);
+  if (/^\d+$/.test(raw) && Number.isInteger(index) && index >= 1 && index <= stickers.length) {
+    return stickers[index - 1]?.id ?? null;
+  }
+  return null;
+}
+
+function pickStickerDeterministically(
+  responseText: string,
+  stickers: Array<{ id: string; description: string; when_to_use: string }>
+): string | null {
+  const text = responseText.toLowerCase();
+  let best: { id: string; score: number } | null = null;
+  for (const sticker of stickers) {
+    const haystack = `${sticker.description} ${sticker.when_to_use}`.toLowerCase();
+    let score = 0;
+    for (const word of STICKER_MATCH_WORDS) {
+      if (text.includes(word) && haystack.includes(word)) score += 2;
+    }
+    const responseTokens = new Set(text.split(/[^a-z0-9]+/).filter((w) => w.length >= 4));
+    for (const token of responseTokens) {
+      if (haystack.includes(token)) score += 1;
+    }
+    if (score > (best?.score ?? 0)) best = { id: sticker.id, score };
+  }
+  return best && best.score >= 3 ? best.id : null;
 }
 
 /**

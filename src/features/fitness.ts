@@ -8,7 +8,11 @@ import { supabase } from "../supabase.js";
 import type { BotMessage } from "../types.js";
 
 const execFileAsync = promisify(execFile);
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL =
+  process.env.CLAUDE_VISION_MODEL ||
+  process.env.CLAUDE_CHAT_MODEL ||
+  process.env.CLAUDE_HAIKU_MODEL ||
+  "claude-haiku-4-5-20251001";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
 // ===== IST week start (Monday) — same pattern as games.ts =====

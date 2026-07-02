@@ -321,8 +321,9 @@ export async function handleMessage(client: any, rawMsg: any) {
       }
     }
 
-    // Occasionally send a matching sticker after the response (explicit mentions only, ~40% chance)
-    if (isGroup && Math.random() < 0.4) {
+    // Occasionally send a matching sticker after organic bot interjections.
+    // Commands are routine/control paths; avoid spending Claude calls on them.
+    if (isGroup && !isCommand && Math.random() < 0.4) {
       const { pickSticker, sendSticker } = await import("./features/stickers.js");
       pickSticker(fullResponse).then((stickerId) => {
         if (stickerId) {
