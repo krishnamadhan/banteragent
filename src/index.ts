@@ -17,7 +17,10 @@ export function getClient() {
   return client;
 }
 
+let reconnecting = false;
+
 async function connectToWhatsApp() {
+  reconnecting = false;
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: "./auth" }),
     puppeteer: {
@@ -71,6 +74,8 @@ async function connectToWhatsApp() {
 
   // ===== DISCONNECTED =====
   client.on("disconnected", async (reason) => {
+    if (reconnecting) return; // guard: a second "disconnected" would spawn a duplicate client + chromium
+    reconnecting = true;
     console.log(`❌ Disconnected: ${reason}. Restarting...`);
     try { await client.destroy(); } catch {}
     setTimeout(connectToWhatsApp, 5000);

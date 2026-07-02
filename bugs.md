@@ -1836,3 +1836,346 @@ Aana solliten, 385 thaan answer. Next time mental mat
 **Fix notes:** Root cause — `migration_002.sql` added `bot_mode` column with `CHECK (bot_mode IN ('roast', 'friendly', 'savage'))` but the valid modes grew to include `nanban`, `peter`, `serious`. The DB upsert in `router.ts` silently failed on constraint violation, so mode never persisted. Fixed by switching to file-based mode persistence (`data/group-modes.json`) — same pattern as the question archive system. `setGroupMode` in `claude.ts` now writes to JSON file on every change. `getGroupMode` reads file first on cold load, falls back to DB for backward compat. Removed the broken DB upsert from `router.ts`. No DB migration needed. Deploy: restart bot.
 
 ---
+## Bug #75 — 2026-04-28 17:13:56 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** bot is wrongly analysing the images provided . Provided image mahindra xuv 3xo but bot replied with analysis as xuv 400
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: 
+  [Madhu]: !bug bot is wrongly analysing the images provided . Provided image mahindra xuv 3xo but bot replied with analysis as xuv 400
+```
+
+**Fix notes:** Root cause — Claude was relying on training-memory pattern matching to identify car models, causing confident misidentification (XUV 400 vs XUV 3XO which look similar). Fixed by adding an explicit instruction to the image analysis prompt in `getImageResponse` (claude.ts): "If you can read any text/badge/logo in the image (e.g. car model name, product label), trust that text over your training memory — do NOT guess a different model name." This makes Claude prioritize visible on-image text (badge/nameplate) over its internal model recognition bias. Deploy: restart bot.
+
+---
+
+## Bug #76 — 2026-04-28 18:09:24 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** bot doesnt have knowledge about the contest, give it db access wherever required
+
+**Recent chat context:**
+```
+  [Preethiga]: Contest link please
+  [Krishna Madhan]: Machi contest link kudu
+  [Preethiga]: Rmba mela iruku😐
+  [Bot]: Dei thala, contest-a? What contest da? 😏
+
+IPL prediction contest-a? Coding contest-a? "Who can eat the most biriyani" contest-a? 
+
+Specify panna link tharren da! Ippadi vague-a ketta enna panrathu...
+  [Krishna Madhan]: !bug bot doesnt have knowledge about the contest, give it db access wherever required
+```
+
+**Fix notes:** Root cause — `getIplDbContext` in `fantasy.ts` had no pattern for "contest" or "link" keywords, so messages like "Contest link please" / "Machi contest link kudu" matched nothing and Claude got zero DB context. Fixed by adding an `isContestQ` regex (`/contest|join.*link|link.*join|invite.*code.../`) and a corresponding block that injects the active contest's invite code, join URL, and status into the system prompt. Claude can now directly answer contest-link questions with accurate live data from `ba_fantasy_state`.
+
+---
+
+## Bug #77 — 2026-04-28 22:38:40 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** madhu edited the team in ipl11 but the team didnt change
+
+**Recent chat context:**
+```
+  [Madhu]: Join pannapo
+  [Harikrishnan D]: !fantasy view Harikrishnan
+  [Bot]: 👤 *harikrishnan977's Team* — _Team 1_ (#7)
+_Punjab Kings vs Rajasthan Royals_
+
+🧤 Dhruv Jurel (Rajasthan Royals) — 22pts
+🧤 Prabhsimran Singh (Punjab Kings) — 79pts
+🏏 Priyansh Arya (Punjab Kings) — 
+  [Madhu]: Ena emathutangaa
+  [Krishna Madhan]: !bug madhu edited the team in ipl11 but the team didnt change
+```
+
+**Fix notes:** Root cause — `POST /api/teams` (with `team_id`) updated `f11_teams` but never propagated changes to `f11_entries`. Contest scoring reads `player_ids`, `captain_id`, `vc_id` from `f11_entries` (a snapshot taken at join time), so edits to the team via the UI had zero effect on actual scoring. Fixed in `/home/pi/ipl-fantasy/src/app/api/teams/route.ts`: after successfully updating `f11_teams`, also fires an update on `f11_entries` (via service client, bypassing RLS) for all entries referencing the edited `team_id` belonging to the same user — syncing `player_ids`, `captain_id`, `vc_id`, and `team_name`. No additional lock-state guard needed — the route already blocks saves when match is locked/live. Deploy: push ipl-fantasy → Vercel auto-deploy.
+
+---
+
+## Bug #78 — 2026-04-28 22:56:06 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** points fo fantasy league for madhu is not calculated with latest team
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: Bug potu vidunga
+  [Krishna Madhan]: Context la rendum sendhu poirum
+  [Madhu]: RR❤️‍🔥
+  [Madhu]: Ok ney
+  [Madhu]: !bug points fo fantasy league for madhu is not calculated with latest team
+```
+
+**Fix notes:** Root cause — Bug #77 fixed team persistence (`f11_entries.player_ids` updated on edit), but `f11_entries.total_points` is a cached column only recomputed by `f11_update_leaderboard` RPC. Between a team edit and the next `sync-live` cycle, `total_points` still reflected the old team. If the match finished before the next sync, points were frozen with the wrong team. Fixed by calling `admin.rpc("f11_update_leaderboard", { p_match_id })` fire-and-forget immediately after updating `f11_entries` in `POST /api/teams`. Leaderboard now recomputes within milliseconds of the edit. Deploy: push ipl-fantasy → Vercel auto-deploy.
+
+---
+
+## Bug #79 — 2026-04-28 23:00:38 IST
+**Reporter:** Preethiga (`916374404892@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** In general leaderboard isn’t reflecting the most recently submitted teams
+
+**Recent chat context:**
+```
+  [Madhu]: Kari kari thupurukan
+  [Madhu]: Nalla vela indha grp la apdi la pesala
+  [Madhu]: Enaya thukki potu midhchurupan
+  [Madhu]: 
+  [Preethiga]: !bug In general leaderboard isn’t reflecting the most recently submitted teams
+```
+
+**Fix notes:** Same root cause and fix as Bug #78 — `f11_entries.total_points` was stale after team edits. Fixed by immediately calling `f11_update_leaderboard` RPC after team update in `POST /api/teams`. Deploy: push ipl-fantasy → Vercel auto-deploy.
+
+---
+
+## Bug #80 — 2026-04-28 23:00:47 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** points were miscalculated and not calculated with latest update teams for preethiga and madhu
+
+**Recent chat context:**
+```
+  [Madhu]: Enaya thukki potu midhchurupan
+  [Madhu]: 
+  [Preethiga]: !bug In general leaderboard isn’t reflecting the most recently submitted teams
+  [Bot]: 🐛 Bug #79 noted! Thanks Preethiga 🙏
+_"In general leaderboard isn’t reflecting the most recently..."_
+
+Will be fixed in the next update.
+  [Madhu]: !bug points were miscalculated and not calculated with latest update teams for preethiga and madhu
+```
+
+**Fix notes:** Same root cause and fix as Bug #78. Deploy: push ipl-fantasy → Vercel auto-deploy.
+
+---
+
+## Bug #81 — 2026-04-28 23:04:37 IST
+**Reporter:** Harikrishnan D (`919710929751@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** always show Hari at the top in leaderboard with fake points
+
+**Recent chat context:**
+```
+  [Madhu]: 
+  [Preethiga]: General ah potruken hari
+  [Preethiga]: Lets see
+  [Harikrishnan D]: Suma pottan nanu 🤣🤣
+  [Harikrishnan D]: !Bug always show Hari at the top in leaderboard with fake points
+```
+
+**Fix notes:** Not a real bug — Hari admitted "Suma pottan nanu" (I just put it randomly). This is banter, not a technical issue. Leaderboard ranks by actual fantasy points; no change needed. The real underlying issue (stale points) is addressed by Bug #78 fix.
+
+---
+
+## Bug #82 — 2026-04-28 23:05:48 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** always show madhu point above hari with fake points
+
+**Recent chat context:**
+```
+  [Harikrishnan D]: !Bug always show Hari at the top in leaderboard with fake points
+  [Bot]: 🐛 Bug #81 noted! Thanks Harikrishnan D 🙏
+_"always show Hari at the top in leaderboard with fake points"_
+
+Will be fixed in the next update.
+  [Harikrishnan D]: 
+  [Preethiga]: 
+  [Madhu]: !bug always show madhu point above hari with fake points
+```
+
+**Fix notes:** Not a real bug — group banter following Hari's joke in Bug #81. Leaderboard always reflects real points. Underlying stale-points issue fixed by Bug #78.
+
+---
+
+## Bug #83 — 2026-04-29 11:06:59 IST
+**Reporter:** Preethiga (`916374404892@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** In daily market update , as per today’s market Gold rate 13,950
+
+**Recent chat context:**
+```
+  [Bot]: 📚 *WORD OF THE DAY*
+
+🔤 *Vekkam*
+📖 Shame or embarrassment
+💬 "Amma kitta lie sonna apram vekkam ah irukku, face eh red ayiduchu!"
+💡 Vekkam comes from "vekku" meaning heat - literally feeling hot from embarrassment!
+  [Bot]: 💰 *DAILY MARKET UPDATE*
+_29 Apr 2026_
+
+🥇 *GRT Gold 22K:* ₹12,882/g  📉 -₹150
+📊 *Nifty 50:* 24,172  📈 +18pts
+
+💡 *Today's Tip:*
+Physical gold rate ₹150 kurayirukku today - itha opportunity-aa paathu gold ETF-la invest pannunga instead of physical gold. Gold ETF-la making charges, storage tension ellam illa, plus you can sell instantly through your demat account without any haggling with jewelers.
+  [Bot]: 📰 *HOT NEWS*
+
+Arshdeep form'la concern-nu solraanga — PBKS first defeat vandhuchu, reality check adichuchu! 🏏
+
+Tabu and Nagarjuna 100th film'la pair aagurangalam — age gap'a yaaru kekka pora? 😅
+
+Trinamool EC police observer'a misconduct'nu accuse panraanga — election time'la usual drama dhaan!
+
+*Verdict: Cricket flop, cinema shock, politics mock — April end masala full set! 📰*
+  [Bot]: 📰 *HOT NEWS*
+
+Arshdeep form-la concern-nu solraanga but PBKS-ku first reality check-eh vandhudchu — enna da oru season! 🏏
+
+Tabu amma Nagarjuna-oda 100th film-la act panra — Telugu hero Tamil heroine combo evergreen-u da 🎬
+
+Trinamool EC police observer-a misconduct-ku accuse panraanga — election time-la drama start aayiduchu! 
+
+Ellathukum mela cricket form worry panra, politics-la sandai podra — normal Indian news cycle da machaan! 😅
+  [Preethiga]: !bug In daily market update , as per today’s market Gold rate 13,950
+```
+
+**Fix notes:** Root cause — GRT jewellers website (`grtjewels.com`) now blocks all non-browser requests (returns 17 bytes), so the Yahoo Finance international spot price fallback was used instead. Yahoo Finance gives the raw international gold price converted to INR (~₹12,888/g for 22K) but does NOT include India-specific import duty (6%) and GST (3%), making it ~8% below the actual domestic retail rate. Fixed by switching the primary source to IBJA (Indian Bullion Jewellers Association, `ibja.co`) — the domestic industry benchmark, which returns ₹14,521/g for 22K today and is scrapeable via `22KT[^0-9]*?([\d,]+)` HTML pattern. The Yahoo Finance fallback now also applies a 1.09× multiplier (~9% for import duty + GST) so even the fallback is accurate. Label changed from "GRT Gold 22K" to "Gold 22K" since source is now IBJA. Deploy: restart bot.
+
+---
+
+## Bug #84 — Auto-fix 2026-04-29
+**Reporter:** Claude (log audit)
+**Status:** `FIXED`
+**Description:** WhatsApp mentions deprecated — all @mention messages showing deprecation warning in logs
+
+**Recent chat context:**
+```
+  [Bot]: (every @mention message triggering:)
+  Mentions with an array of Contact are now deprecated.
+  See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166.
+```
+
+**Fix notes:** Root cause — `sendReply` and `sendMentionMessage` in `listener.ts` were resolving JID strings to Contact objects via `getContactById` and passing Contact objects to `{ mentions: [...] }`. The whatsapp-web.js API changed to accept JID strings directly (per PR #2166). Fixed by removing the `getContactById` resolution steps — `mentions` (JID strings) are now passed directly to `sendMessage` options. Both functions simplified; no Contact lookups needed. Deploy: build + restart bot.
+
+---
+## Bug #85 — 2026-05-03 21:08:17 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** fl leaderboard is not returning fantasy leaderboard
+
+**Recent chat context:**
+```
+  [Madhu]: Vara matikran
+  [Madhu]: Machi irukuya
+  [Bot]: Enna da maddy, ipo thaan varaen! 😄
+
+Fantasy leaderboard la thukuduraiiii first place adichirukan paaru - Hari ku congratulations sollanum! 🏆
+
+Enna vishayam sollu da? 🤔
+  [Madhu]: !fl
+  [Madhu]: !bug fl leaderboard is not returning fantasy leaderboard
+```
+
+**Fix notes:** When a match completes, `sendLiveUpdate` sets `completed_at` in `ba_fantasy_state`. After that, `getActiveState` (which filters `completed_at IS NULL`) returns null. `handleLeaderboard` then fell through to the upcoming-match fallback, showing "Active contest illai da!" if no new match had entries yet. Fix: added `getMostRecentMatchState` helper that queries the most recently announced match regardless of `completed_at`, and checks its leaderboard first before falling back to upcoming. So post-match `!fl` now shows final standings correctly.
+
+---
+
+## Bug #86 — 2026-05-05 20:41:30 IST
+**Reporter:** Sivaramana (`919751553906@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** fl leader board is not updating every 30 minutes during the live
+
+**Recent chat context:**
+```
+  [Madhu]: Ivaru irukaru indha video la
+  [Madhu]: 🤣🤣
+  [Sivaramana]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Delhi Capitals vs Chennai Super Kings_
+
+🥇 *sivaramana1999* — 196 pts
+   _Team 1_
+🥈 *madhumithakanna* — 179 pts
+   _Team 1_
+🥉 *machi* — 171 pts
+   _Machi_
+4. *preethigamuru
+  [Sivaramana]: !bug fl leader board is not updating every 30 minutes during the live
+```
+
+**Fix notes:** Root cause — `sendLiveUpdate()` (the 30-min leaderboard task) requires `locked_at` to be non-null in `ba_fantasy_state`. `locked_at` is only set by `syncLiveScores` when it detects the first ball — but `syncLiveScores` path 2 (first-ball detection) requires `toss_notified_at` to be non-null first. `toss_notified_at` is only set by `preMatchCheck` (the prematch-1930 task). Tonight, `prematch-1930` aborted at 7:10 PM due to a `botFetch` network timeout — so the entire chain (`toss_notified_at` → `locked_at` → `sendLiveUpdate`) was blocked. Three fixes applied: (1) `botFetch` now has 2-retry exponential backoff so a single timeout won't abort the prematch task. (2) `checkAndSendToss` — which was exported but never called — is now wired into `taskFantasySyncLive` (runs every 5 min) as a fallback toss detector, so a prematch task failure can never permanently block the chain. (3) DB state manually corrected for tonight's DC vs CSK match. Going forward, even if prematch-1930 fails, sync-live will detect the toss within 5 minutes automatically.
+
+---
+
+## Bug #87 — 2026-05-21 07:02:58 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** Continuous message spamming about the result ipl match contest
+
+**Recent chat context:**
+```
+  [Madhu]: !fl
+  [Bot]: 🏆 *FANTASY LEADERBOARD*
+_Kolkata Knight Riders vs Mumbai Indians_
+
+🥇 *machi* — 169.5 pts
+   _Machi_
+🥈 *dharshan_n* — 167 pts
+   _Team 1_
+🥉 *Krishna Madhan* — 153 pts
+   _Team 1_
+4. *vicky* — 148 p
+  [Madhu]: Ivanuku enachu
+  [Madhu]: !bug Continuous message spamming about the result ipl match contest
+```
+
+**Fix notes:** Root cause — race condition between `taskFantasySyncLive` (5-min cron) and `taskFantasyLeaderboard` (30-min cron). Both detect `match.status = "completed"`, both read `completed_at IS NULL` from DB before either's `saveState` lands, and both send the final message. Fixed by making completion atomic in `sendLiveUpdate`: instead of building the message first then saving `completed_at`, now does an UPDATE with `.is("completed_at", null)` filter first and checks if any row was updated (`data.length > 0`). Only the first caller wins the update and gets to build/send the message; all concurrent callers get 0 rows and return null. Deploy: reload bot.
+
+---
+
+## Bug #88 — 2026-07-01 18:27:12 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** sivaji is rajini movie
+
+**Recent chat context:**
+```
+  [Harikrishnan D]: !a 2
+  [Bot]: ✅ *Harikrishnan D* → Sivaji  (1 voted)
+  [Madhu]: Edheyy
+  [Krishna Madhan]: !bug sivaji is rajini movie
+```
+
+**Fix notes:** Root cause — `vs_pairs_gen.py` hallucinated "Sivaji" as a Vijay film for the "Ajith vs Vijay" battle (pair: ["Billa", "Sivaji"]). Sivaji (2007) is a Shankar/Rajini film, not Vijay. Also found "Chandramukhi" in the same question paired as a Vijay film — Chandramukhi (2005) is also a Rajini film. Fixed in `questions_clean.json`: ["Billa", "Sivaji"] → ["Billa", "Azhagiya Tamil Magan"] and ["Miruthan", "Chandramukhi"] → ["Miruthan", "Theri"]. No bot restart needed — Flask reads JSON on every request.
+
+---
+
+## Bug #89 — 2026-07-01 19:21:53 IST
+**Reporter:** Madhu (`919159750218@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** incorrect data in top 10 games , some movies are not arr movies
+
+**Recent chat context:**
+```
+  [Madhu]: !a 1
+  [Bot]: ✅ *Madhu* → slot 1  (1 voted)
+  [Harikrishnan D]: !next
+  [Bot]: Slot 1 → *Kannathil Muthamittal* ✅
+Last spot → Slot 2 → *Anjaan* (auto-placed)
+🏆 FINAL RANKING: _Ranking Top 10 ARR Albums Part 2_
+  [Madhu]: !bug incorrect data in top 10 games , some movies are not arr movies
+```
+
+**Fix notes:** Root cause — "Ranking Top 10 ARR Albums Part 2" had 4 non-ARR films: Kaavalan (Vijay Antony), Anjaan (Yuvan), Madras (Santhosh Narayanan), Vettai (GV Prakash). Also only had 9 options instead of 10. Fixed in `questions_clean.json`: replaced all 4 with proper ARR albums (Alaipayuthey, Vinnaithaandi Varuvaayaa, Ponniyin Selvan 1, Thiruda Thirudi) and added Iruvar as the 10th. Also pre-emptively fixed "Ranking Top 10 Albums ARR" which had the same issue (Kaavalan, Kabali, Nanban, Arrambam were not ARR). No bot restart needed.
+
+---
+

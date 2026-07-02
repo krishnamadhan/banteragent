@@ -20,6 +20,7 @@ export async function handleAdminCommand(
   const ownerPhone = process.env.BOT_OWNER_PHONE;
   if (isGroup || senderPhone !== ownerPhone) return false;
   if (!text.startsWith("!")) return false;
+  if (text.toLowerCase().startsWith("!pi ") || text.toLowerCase() === "!pi") return false;
 
   const [cmd, ...args] = text.slice(1).toLowerCase().trim().split(/\s+/);
   let reply = "";
@@ -188,23 +189,114 @@ read()
         break;
       }
 
+      case "run": {
+        const task = args.join(" ").trim();
+        if (!task) {
+          reply = "Usage: !run <task description>\nExample: !run why did banteragent crash at 3pm";
+          break;
+        }
+
+        const SESSION_CONTEXT = `# Pi Remote Session — System Context
+
+## Device
+- Raspberry Pi 5, Linux (aarch64), user: pi, home: /home/pi
+- Shell: bash, --dangerously-skip-permissions: active
+
+## PM2 Services
+- banteragent     — WhatsApp bot (TypeScript/ESM), internal HTTP on port 3099
+- battery-monitor — Battery health + AC power monitor
+- pi-monitor      — System health, writes /tmp/pi-monitor-state.json
+- pi-scheduler    — Centralized node-cron (IST), POSTs tasks to BanterAgent :3099
+
+## Projects
+
+BanterAgent — /home/pi/banteragent/
+  Source: src/ (TypeScript, ESM). Build: cd /home/pi/banteragent && npm run build
+  Deploy after build: pm2 restart banteragent
+  Bug tracker: /home/pi/banteragent/bugs.md
+  Config: /home/pi/banteragent/.env
+  Internal API:
+    POST http://127.0.0.1:3099/notify   { message, to? }  — send WhatsApp message
+    POST http://127.0.0.1:3099/run-task { task }           — trigger a scheduled task
+  WhatsApp targets:
+    Main group:  120363399878677641@g.us
+    IPL Fantasy: 120363424669447247@g.us
+    Admin DM:    919487506127@c.us
+
+pi-scheduler — /home/pi/pi-scheduler/index.js (CommonJS, node-cron)
+  Restart: pm2 restart pi-scheduler
+
+IPL Fantasy — /home/pi/ipl-fantasy/ (Next.js 16, Supabase, Tailwind)
+  Deploy: git commit + push to main → Vercel auto-deploys
+
+BSPL Cricket Sim — /home/pi/bspl/ (Next.js, Supabase, not deployed)
+
+Robot — /home/pi/robot/ and /home/pi/robot_move.py
+
+## Scripts & Logs
+  Scripts: /home/pi/scripts/
+  Logs:    /home/pi/logs/
+  Scheduled bug fixer: /home/pi/scripts/scheduled-bug-fixer.sh (runs every 30 min via pi-scheduler)
+  Apply-fix: /home/pi/banteragent/src/apply-fix.sh
+
+## Sending WhatsApp from shell
+  curl -s -X POST http://127.0.0.1:3099/notify \\
+    -H 'Content-Type: application/json' \\
+    -d '{"message":"...","to":"919487506127@c.us"}'
+
+## Task
+${task}`;
+
+        // Show context to admin before spawning so they can review it
+        const preview = SESSION_CONTEXT.length > 3600
+          ? SESSION_CONTEXT.slice(0, 3600) + "\n...(truncated for display)"
+          : SESSION_CONTEXT;
+        await client.sendMessage(ownerPhone!, `*[Claude Session Starting]*\nTask: _${task}_\n\n*Context the session will receive:*\n\`\`\`\n${preview}\n\`\`\``);
+
+        // Spawn Claude — runs asynchronously, sends result back when done
+        const { execFile } = await import("child_process");
+        execFile(
+          "claude",
+          ["--dangerously-skip-permissions", "--print", SESSION_CONTEXT],
+          { timeout: 10 * 60 * 1000, maxBuffer: 4 * 1024 * 1024 },
+          async (err, stdout) => {
+            const output = stdout?.trim();
+            if (!output) {
+              const errMsg = (err?.message ?? "No output returned").slice(0, 400);
+              await client.sendMessage(ownerPhone!, `*[Claude Error]*\n${errMsg}`).catch(() => {});
+              return;
+            }
+            const MAX = 3800;
+            const parts = Math.ceil(output.length / MAX);
+            for (let i = 0; i < output.length; i += MAX) {
+              const chunk = output.slice(i, i + MAX);
+              const label = parts > 1 ? ` (${Math.floor(i / MAX) + 1}/${parts})` : "";
+              await client.sendMessage(ownerPhone!, `*[Claude Result]${label}*\n${chunk}`).catch(() => {});
+            }
+          }
+        );
+
+        return true; // context message already sent above
+      }
+
       case "help":
         reply = `*[Monitor] Admin Commands*
-!ping ? alive check + uptime
-!battery ? battery level, voltage, AC + charge status
-!status ? full system status
-!charging on|off ? manually enable/disable charging
-!restart <service> ? restart PM2 process
-!logs [service] [n] ? last N log lines (default 30)
-!ip ? IP addresses (local + Tailscale)
-!uptime ? uptime + load average
-!wifi ? active network connections
-!bugs ? show open/pending bugs
-!fixbugs ? manually trigger bug fixer
-!temp ? CPU temperature
-!ps ? top processes by CPU
-!reboot ? reboot Pi
-!shutdown ? shutdown Pi`;
+!ping — alive check + uptime
+!battery — battery level, voltage, AC + charge status
+!status — full system status
+!charging on|off — manually enable/disable charging
+!restart <service> — restart PM2 process
+!logs [service] [n] — last N log lines (default 30)
+!ip — IP addresses (local + Tailscale)
+!uptime — uptime + load average
+!wifi — active network connections
+!bugs — show open/pending bugs
+!fixbugs — manually trigger bug fixer
+!temp — CPU temperature
+!ps — top processes by CPU
+!reboot — reboot Pi
+!shutdown — shutdown Pi
+!run <task> — spawn a Claude session to execute a task`;
         break;
 
       // Commands handled by the main router — fall through so they work in DM too
@@ -213,14 +305,7 @@ read()
       case "fl":
       case "solli":
       case "predict":
-        return false;
-
-      // Commands handled by the main router — fall through so they work in DM too
-      case "bug":
-      case "fantasy":
-      case "fl":
-      case "solli":
-      case "predict":
+      case "cosmo":
         return false;
 
       default:

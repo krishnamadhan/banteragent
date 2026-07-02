@@ -13,6 +13,7 @@ import { generateBirthdayWish, generateWordOfDay } from "./features/fun.js";
 import { generateAwards, getMonthlyRecapStats } from "./features/analytics.js";
 import { checkDueReminders } from "./features/reminders.js";
 import { checkCricketUpdates } from "./features/cricket.js";
+import { rcbFinalsCommentary } from "./features/rcb-finals.js";
 import { scheduledNewsDrop } from "./features/news.js";
 import { handleGameCommand } from "./features/games.js";
 import {
@@ -348,11 +349,25 @@ async function taskFantasySyncLive(groupId: string) {
 async function taskFantasyLeaderboard(groupId: string) {
   if (!process.env.FANTASY_BOT_SECRET) return;
   const msg = await sendLiveUpdate(groupId);
-  if (msg) { await sendMessage(groupId, msg); addBotMessageToHistory(groupId, msg); }
+  if (msg) {
+    const { getAllGroupIds } = await import("./group-config.js");
+    for (const gid of getAllGroupIds()) {
+      await sendMessage(gid, msg);
+      addBotMessageToHistory(gid, msg);
+    }
+  }
 }
 
 async function taskFantasyEnforceDeadlines(_groupId: string) {
   await enforceDeadlines();
+}
+
+async function taskRcbFinalsLive(groupId: string) {
+  const msg = await rcbFinalsCommentary();
+  if (msg) {
+    await sendMessage(groupId, msg);
+    addBotMessageToHistory(groupId, msg);
+  }
 }
 
 async function taskPiHealthReport(groupId: string) {
@@ -445,6 +460,7 @@ const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
   "fantasy-leaderboard":     taskFantasyLeaderboard,
   "fantasy-enforce-deadlines": taskFantasyEnforceDeadlines,
   "pi-health-report":        taskPiHealthReport,
+  "rcb-finals-live":         taskRcbFinalsLive,
 };
 
 // Tracks whether sendMessage was called during the current task
@@ -501,11 +517,11 @@ function istDateStr(): string {
   return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-export async function runTask(name: string, groupId: string): Promise<{ ok: boolean; error?: string }> {
+export async function runTask(name: string, groupId: string, force = false): Promise<{ ok: boolean; error?: string }> {
   const fn = TASK_MAP[name];
   if (!fn) return { ok: false, error: `Unknown task: ${name}` };
 
-  if (ONCE_DAILY_TASKS.has(name)) {
+  if (!force && ONCE_DAILY_TASKS.has(name)) {
     const key  = `${name}:${groupId}`;
     const today = istDateStr();
     if (_taskRanOnDate.get(key) === today) {

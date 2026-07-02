@@ -47,26 +47,39 @@ const BOT_SECRET = process.env.FANTASY_BOT_SECRET ?? "";
 
 // ─── HTTP helper ─────────────────────────────────────────────────────────────
 
-async function botFetch(path: string, opts?: RequestInit): Promise<any> {
+async function botFetch(path: string, opts?: RequestInit, retries = 2): Promise<any> {
   const t0 = Date.now();
   let status = 0;
-  try {
-    const res = await fetch(`${FANTASY_BASE}/api/bot${path}`, {
-      ...opts,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${BOT_SECRET}`,
-        ...(opts?.headers ?? {}),
-      },
-    });
-    status = res.status;
-    const text = await res.text();
-    monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0 });
-    try { return JSON.parse(text); } catch { return { error: text }; }
-  } catch (e: any) {
-    monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0, error: e?.message });
-    throw e;
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      const res = await fetch(`${FANTASY_BASE}/api/bot${path}`, {
+        ...opts,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${BOT_SECRET}`,
+          ...(opts?.headers ?? {}),
+        },
+      });
+      clearTimeout(timer);
+      status = res.status;
+      const text = await res.text();
+      monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0 });
+      try { return JSON.parse(text); } catch { return { error: text }; }
+    } catch (e: any) {
+      lastError = e;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+      monApiCall({ svc: "fantasy", path: path.split("?")[0]!, method: opts?.method ?? "GET", status, dur_ms: Date.now() - t0, error: e?.message });
+      throw e;
+    }
   }
+  throw lastError;
 }
 
 // ─── State helpers ───────────────────────────────────────────────────────────
@@ -101,12 +114,23 @@ async function saveState(matchId: string, groupId: string, update: Record<string
  *   2. Soonest UPCOMING match (scheduled_at > now)
  */
 async function getActiveState(groupId: string) {
-  const { data: states } = await supabase
+  let { data: states } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
     .not("announced_at", "is", null)
     .is("completed_at", null);
+
+  // Fantasy state is written by admin tasks running on the primary group only.
+  // If this group has no rows, fall back to any group's state (shared match data).
+  if (!states?.length) {
+    const { data: fallback } = await supabase
+      .from("ba_fantasy_state")
+      .select("*")
+      .not("announced_at", "is", null)
+      .is("completed_at", null);
+    states = fallback;
+  }
 
   if (!states?.length) return null;
 
@@ -339,7 +363,9 @@ export async function buildMatchAnnouncement(match: any, contest: any): Promise<
 
   msg +=
     `*Ippave team set pannu — toss nadanthathum playing 11 release aagum!*\n` +
-    `_(Deadline: match start time)_`;
+    `_(Deadline: match start time)_\n\n` +
+    `🎁 *GIFT VOUCHER CHALLENGE* — First to reach *100 ranking pts* wins ₹500!\n` +
+    `_(Each match: 1st place earns N pts, 2nd N-1 … N = no. of participants. Use !win to check standings)_`;
 
   return msg;
 }
@@ -460,9 +486,47 @@ export async function enforceDeadlines(): Promise<void> {
     await fetch(`${base}/api/cron/enforce-deadlines`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${cronSecret}` },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
   } catch { /* silent */ }
+}
+
+/** Call the admin sync-playing-xi endpoint for a match (bypasses auth via internal-cron header). */
+async function adminSyncPlayingXi(matchId: string): Promise<void> {
+  const cronSecret = process.env.FANTASY_CRON_SECRET ?? "abc";
+  const base = process.env.FANTASY_APP_URL ?? "https://ipl11.vercel.app";
+  try {
+    await fetch(`${base}/api/admin/matches/${matchId}/sync-playing-xi`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-cron": cronSecret,
+      },
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch { /* silent */ }
+}
+
+/**
+ * Force-sync playing XI for all matches that are announced but not yet completed.
+ * Called at 7:50 PM IST as a safety net after toss + lineup confirmation.
+ */
+export async function syncPlayingXiNow(): Promise<void> {
+  try {
+    const { data: states } = await supabase
+      .from("ba_fantasy_state")
+      .select("match_id")
+      .not("announced_at", "is", null)
+      .is("completed_at", null);
+    const seen = new Set<string>();
+    for (const s of states ?? []) {
+      if (seen.has(s.match_id)) continue;
+      seen.add(s.match_id);
+      await adminSyncPlayingXi(s.match_id);
+    }
+  } catch (e: any) {
+    console.error("[syncPlayingXiNow] error:", e?.message);
+  }
 }
 
 // ─── Scheduled actions (called from scheduler.ts) ────────────────────────────
@@ -567,6 +631,9 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     // Only check within 2h of match start
     if (msUntil > 2 * 60 * 60 * 1000) continue;
 
+    // Sync confirmed XI from Cricbuzz into Supabase so app shows PLAYING/BENCH badges
+    await adminSyncPlayingXi(state.match_id);
+
     const xiData = await botFetch(`/playing-xi?match_id=${state.match_id}`);
     if (!xiData?.match) continue;
 
@@ -574,10 +641,20 @@ export async function checkAndSendToss(groupId: string): Promise<string | null> 
     const hasToss = !!xiData.match.toss_winner;
     if (!hasToss) continue;
 
-    await saveState(state.match_id, groupId, {
-      toss_notified_at: new Date().toISOString(),
-      locked_at: new Date().toISOString(),
-    });
+    // Update toss/lock for ALL groups that have this match — not just the caller's group.
+    // Without this, groups whose prematch task failed would never get locked_at set,
+    // blocking live score updates for them entirely.
+    const now = new Date().toISOString();
+    const { data: allMatchGroups } = await supabase
+      .from("ba_fantasy_state")
+      .select("group_id")
+      .eq("match_id", state.match_id)
+      .is("toss_notified_at", null);
+    for (const row of allMatchGroups ?? []) {
+      await saveState(state.match_id, row.group_id, { toss_notified_at: now, locked_at: now });
+    }
+    // Also ensure the caller's group is always updated (in case it already had toss_notified_at set earlier)
+    await saveState(state.match_id, groupId, { toss_notified_at: now, locked_at: now });
 
     // Update Machi's team with confirmed playing XI
     let machiLine = "";
@@ -626,19 +703,28 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
 
   const { match, top_performers } = summary;
 
-  // Match is done — send final results then mark completed
+  // Match is done — claim completion atomically first so only ONE caller ever fires the final message.
+  // Both taskFantasySyncLive (5-min) and taskFantasyLeaderboard (30-min) can race here;
+  // the DB update only succeeds (count > 0) for the first caller.
   if (match.status === "completed" || match.status === "in_review") {
-    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
-    await saveState(state.match_id, groupId, { completed_at: new Date().toISOString() });
+    const { data: claimed } = await supabase
+      .from("ba_fantasy_state")
+      .update({ completed_at: new Date().toISOString() })
+      .eq("match_id", state.match_id)
+      .eq("group_id", groupId)
+      .is("completed_at", null)
+      .select("match_id");
+    if (!claimed?.length) return null; // Already finalized by another concurrent call
 
-    // Fetch Solli Adi bonus for this match+group
+    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
+
+    // Fetch Solli Adi bonus for this match across ALL groups (solli can be played in any group)
     let bonusMap: Map<string, number> | undefined;
     try {
       const { data: rounds } = await supabase
         .from("ba_solli_adi")
         .select("id")
         .eq("match_id", state.match_id)
-        .eq("group_id", groupId)
         .eq("status", "resolved");
       if (rounds?.length) {
         const roundIds = rounds.map((r: any) => r.id);
@@ -672,16 +758,16 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
     let msg = `🏁 *MATCH OVER!* ${state.team_home} vs ${state.team_away}\n\n`;
     if (match.result_summary) msg += `📢 ${match.result_summary}\n\n`;
 
+    let allSorted: any[] = [];
     if (lb?.leaderboard?.length) {
       const hasBonus = bonusMap && bonusMap.size > 0;
       msg += `🏆 *FANTASY FINAL STANDINGS*${hasBonus ? " (+ Solli Adi 🎙️)" : ""}\n`;
       const medals = ["🥇", "🥈", "🥉"];
-      // Re-sort including bonus
-      const sorted = (lb.leaderboard as any[])
+      // Re-sort including bonus — keep full list for ranking points
+      allSorted = (lb.leaderboard as any[])
         .map((e: any) => ({ ...e, total: (e.points ?? 0) + findBonus(e.display_name) }))
-        .sort((a: any, b: any) => b.total - a.total)
-        .slice(0, 10);
-      sorted.forEach((e: any, i: number) => {
+        .sort((a: any, b: any) => b.total - a.total);
+      allSorted.slice(0, 10).forEach((e: any, i: number) => {
         const medal = medals[i] ?? `${i + 1}.`;
         const bonus = findBonus(e.display_name);
         const bonusBit = bonus > 0 ? ` (+${bonus}🎙️)` : "";
@@ -695,6 +781,30 @@ export async function sendLiveUpdate(groupId: string): Promise<string | null> {
 
     if (top_performers?.length) {
       msg += `\n⭐ *Top performer:* ${top_performers[0].name} — ${top_performers[0].points} pts\n`;
+    }
+
+    // Award ranking points and append summary
+    if (allSorted.length > 0) {
+      const matchLabel = `${state.team_home} vs ${state.team_away}`;
+      const { milestonePlayer, rankingLines } = await awardRankingPoints(
+        state.match_id, matchLabel, allSorted
+      );
+      msg += rankingLines;
+
+      // Announce gift voucher winner to all groups
+      if (milestonePlayer) {
+        const celebMsg =
+          `🎉🎊 *GIFT VOUCHER WINNER!* 🎊🎉\n\n` +
+          `*${milestonePlayer}* has crossed *100 ranking points* and wins the *₹500 gift voucher!* 🎁\n\n` +
+          `Congrats da! You crushed it this season 🏆🏏`;
+        try {
+          const { getAllGroupIds } = await import("../group-config.js");
+          const { sendMessage } = await import("../listener.js");
+          for (const gid of getAllGroupIds()) {
+            await sendMessage(gid, celebMsg);
+          }
+        } catch { /* non-fatal */ }
+      }
     }
 
     msg += `\nGG everyone! 🏏`;
@@ -984,14 +1094,17 @@ export async function morningWinnerAnnouncement(groupId: string): Promise<string
   const yesterdayEndUTC   = new Date(yesterdayStartUTC.getTime() + 24 * 60 * 60 * 1000);
 
   // Find matches that:
-  //   (a) completed yesterday (completed_at in yesterday's IST window), OR
+  //   (a) were PLAYED yesterday (scheduled_at in yesterday's IST window) and are completed, OR
   //   (b) had a toss yesterday but were never marked completed (bot restart, etc.)
+  // NOTE: filter by scheduled_at (when the game was played), NOT completed_at (when our system
+  // processed it) — completed_at can be set days later and causes wrong-day recaps.
   const { data: completedYesterday } = await supabase
     .from("ba_fantasy_state")
     .select("*")
     .eq("group_id", groupId)
-    .gte("completed_at", yesterdayStartUTC.toISOString())
-    .lt("completed_at", yesterdayEndUTC.toISOString());
+    .not("completed_at", "is", null)
+    .gte("scheduled_at", yesterdayStartUTC.toISOString())
+    .lt("scheduled_at", yesterdayEndUTC.toISOString());
 
   const { data: unfinalized } = await supabase
     .from("ba_fantasy_state")
@@ -1025,26 +1138,70 @@ export async function morningWinnerAnnouncement(groupId: string): Promise<string
       await saveState(state.match_id, groupId, { completed_at: new Date(yesterdayEndUTC.getTime() - 1).toISOString() });
     }
 
-    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=5`);
+    const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
     if (!lb?.leaderboard?.length) continue;
 
+    // Fetch Solli Adi bonus for this match across all groups
+    const bonusMap = new Map<string, number>();
+    try {
+      const { data: rounds } = await supabase
+        .from("ba_solli_adi")
+        .select("id")
+        .eq("match_id", state.match_id)
+        .eq("status", "resolved");
+      if (rounds?.length) {
+        const roundIds = rounds.map((r: any) => r.id);
+        const { data: bonusPreds } = await supabase
+          .from("ba_solli_adi_prediction")
+          .select("user_name, points_awarded")
+          .in("round_id", roundIds)
+          .gt("points_awarded", 0);
+        for (const p of bonusPreds ?? []) {
+          bonusMap.set(p.user_name, (bonusMap.get(p.user_name) ?? 0) + (p.points_awarded ?? 0));
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    const findBonus = (name: string): number => {
+      const direct = bonusMap.get(name);
+      if (direct !== undefined) return direct;
+      const dn = name.toLowerCase();
+      for (const [key, val] of bonusMap) {
+        const k = key.toLowerCase();
+        if (dn.startsWith(k) || k.startsWith(dn)) return val;
+      }
+      return 0;
+    };
+
+    const hasBonus = bonusMap.size > 0;
+    const allSorted = (lb.leaderboard as any[])
+      .map((e: any) => ({ ...e, total: (e.points ?? 0) + findBonus(e.display_name) }))
+      .sort((a: any, b: any) => b.total - a.total);
+
     const medals = ["🥇", "🥈", "🥉"];
-    const winner = lb.leaderboard[0];
+    const winner = allSorted[0];
 
     let msg =
       `🌅 *MORNING RECAP — ${state.team_home} vs ${state.team_away}*\n\n` +
       `Nanna thoongireenga? Nethu match results solren! 😄\n\n` +
-      `🏆 *FINAL STANDINGS*\n`;
+      `🏆 *FINAL STANDINGS*${hasBonus ? " (+ Solli Adi 🎙️)" : ""}\n`;
 
-    lb.leaderboard.forEach((e: any, i: number) => {
+    allSorted.slice(0, 5).forEach((e: any, i: number) => {
       const medal = medals[i] ?? `${i + 1}.`;
-      msg += `${medal} *${e.display_name}* — ${e.points} pts\n`;
+      const bonus = findBonus(e.display_name);
+      const bonusBit = bonus > 0 ? ` (+${bonus}🎙️)` : "";
+      msg += `${medal} *${e.display_name}* — ${e.points} pts${bonusBit}\n`;
       if (e.team_name) msg += `   _${e.team_name}_\n`;
     });
 
     if (winner) {
       msg += `\nCongrats *${winner.display_name}*! 🎉 Well played everyone 🏏`;
     }
+
+    // Award ranking points (idempotent — safe if sendLiveUpdate already awarded)
+    const matchLabel = `${state.team_home} vs ${state.team_away}`;
+    const { rankingLines } = await awardRankingPoints(state.match_id, matchLabel, allSorted);
+    msg += rankingLines;
 
     announcements.push(msg);
   }
@@ -1081,11 +1238,30 @@ export async function syncLiveScores(groupId: string): Promise<string | null> {
     }).catch((e: any) => console.error(`[fantasy] sync error for ${state.match_id}:`, e));
   }
 
-  // ── 1b. Check Solli Adi over-prediction resolutions ───────────────────────
+  // ── 1b. Check match completion + Solli Adi resolutions ───────────────────
+  // Match-summary is fetched here anyway — if match is done, hand off to
+  // sendLiveUpdate immediately instead of waiting up to 29 min for the
+  // 30-min leaderboard cron to notice.
   const solliMessages: string[] = [];
   for (const state of liveStates ?? []) {
     try {
       const summary = await botFetch(`/match-summary?match_id=${state.match_id}`);
+      const matchStatus = summary?.match?.status ?? "live";
+
+      // Match just finished — trigger final result immediately (don't wait for cron)
+      if (matchStatus === "completed" || matchStatus === "in_review") {
+        console.log(`[fantasy] Match ${state.match_id} completed — triggering final result now`);
+        try {
+          return await sendLiveUpdate(groupId);
+        } finally {
+          // Always mark completed so this match doesn't re-trigger on next cron cycle,
+          // even if sendLiveUpdate exits early (e.g. botFetch returns null).
+          await saveState(state.match_id, groupId, { completed_at: new Date().toISOString() }).catch((e: any) =>
+            console.error(`[fantasy] failed to mark completed_at for ${state.match_id}:`, e?.message)
+          );
+        }
+      }
+
       const ls = summary?.match?.live_score;
       if (!ls?.current_batting) continue;
       const batting = ls.current_batting as string;
@@ -1093,7 +1269,6 @@ export async function syncLiveScores(groupId: string): Promise<string | null> {
       const runs = isTeam1 ? (ls.team1_runs ?? 0) : (ls.team2_runs ?? 0);
       const oversStr = isTeam1 ? (ls.team1_overs ?? "0") : (ls.team2_overs ?? "0");
       const completedOvers = parseInt(String(oversStr).split(".")[0] ?? "0");
-      const matchStatus = summary?.match?.status ?? "live";
       const msgs = await checkAndResolveSolliAdi(state.match_id, groupId, runs, completedOvers, matchStatus);
       solliMessages.push(...msgs);
     } catch (e: any) {
@@ -1149,7 +1324,14 @@ export async function syncLiveScores(groupId: string): Promise<string | null> {
       body: JSON.stringify({ match_id: state.match_id, action: "go_live" }),
     }).catch(() => {});
 
-    await saveState(state.match_id, groupId, { locked_at: new Date().toISOString() });
+    // Set locked_at for ALL groups (not just the primary one) so every group's
+    // sendLiveUpdate can find the state and send live/final messages.
+    const lockedAt = new Date().toISOString();
+    await supabase
+      .from("ba_fantasy_state")
+      .update({ locked_at: lockedAt })
+      .eq("match_id", state.match_id)
+      .is("locked_at", null);
 
     console.log(`[fantasy] Match ${state.match_id} went live — first ball detected`);
 
@@ -1255,12 +1437,13 @@ function formatDiff(data: any): string {
 export async function getIplDbContext(message: string, groupId: string): Promise<string | null> {
   const lower = message.toLowerCase();
 
-  const isPlayerQ = /player|squad|yaar.*pick|pick.*who|who.*pick|available|bench|playing/.test(lower);
-  const isTeamQ   = /my team|un team|his team|show team|view team|team.*show/.test(lower);
-  const isLbQ     = /leaderboard|rank|points|standings|yaar first|who.*first|first.*place|யாரு/.test(lower);
-  const isMatchQ  = /next match|upcoming|schedule|match.*when|when.*match|today match|innikki|match iruk|ipo match|match nadak|match aagi|match irruk|innaiku match|innikku match/.test(lower);
+  const isPlayerQ  = /player|squad|yaar.*pick|pick.*who|who.*pick|available|bench|playing/.test(lower);
+  const isTeamQ    = /my team|un team|his team|show team|view team|team.*show/.test(lower);
+  const isLbQ      = /leaderboard|rank|points|standings|yaar first|who.*first|first.*place|யாரு/.test(lower);
+  const isMatchQ   = /next match|upcoming|schedule|match.*when|when.*match|today match|innikki|match iruk|ipo match|match nadak|match aagi|match irruk|innaiku match|innikku match/.test(lower);
+  const isContestQ = /contest|join.*link|link.*join|invite.*code|code.*invite|fantasy.*link|link.*fantasy/.test(lower);
 
-  if (!isPlayerQ && !isTeamQ && !isLbQ && !isMatchQ) return null;
+  if (!isPlayerQ && !isTeamQ && !isLbQ && !isMatchQ && !isContestQ) return null;
 
   try {
     const state = await getActiveState(groupId);
@@ -1298,6 +1481,27 @@ export async function getIplDbContext(message: string, groupId: string): Promise
           `${m.team_home} vs ${m.team_away} — ${formatIST(m.scheduled_at)} [${m.status}]`
         );
         parts.push(`UPCOMING MATCHES:\n${lines.join("\n")}`);
+      }
+    }
+
+    if (isContestQ) {
+      if (state?.invite_code) {
+        const joinUrl = `${FANTASY_BASE}/contests/join?code=${state.invite_code}`;
+        const isLive = new Date(state.scheduled_at).getTime() <= Date.now();
+        parts.push(
+          `ACTIVE CONTEST — ${state.team_home} vs ${state.team_away}:\n` +
+          `Invite Code: ${state.invite_code}\n` +
+          `Join Link: ${joinUrl}\n` +
+          `Status: ${isLive ? "LIVE (joining may be closed)" : "Open for entries"}`
+        );
+      } else if (state) {
+        parts.push(
+          `ACTIVE CONTEST — ${state.team_home} vs ${state.team_away}:\n` +
+          `App: ${FANTASY_BASE}/matches\n` +
+          `(Invite code not set yet)`
+        );
+      } else {
+        parts.push(`CONTEST STATUS: No active contest right now. Next match will be announced soon.`);
       }
     }
 
@@ -1352,11 +1556,46 @@ async function handleJoin(msg: BotMessage): Promise<string> {
   );
 }
 
+async function getMostRecentMatchState(groupId: string) {
+  let { data } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .eq("group_id", groupId)
+    .not("announced_at", "is", null)
+    .order("scheduled_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (data) return data;
+  const { data: fallback } = await supabase
+    .from("ba_fantasy_state")
+    .select("*")
+    .not("announced_at", "is", null)
+    .order("scheduled_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return fallback ?? null;
+}
+
 async function handleLeaderboard(msg: BotMessage): Promise<string> {
   const state = await getActiveState(msg.groupId);
 
   if (!state) {
-    // No announced contest — fall back to next upcoming match
+    // No active contest — check if there's a recently completed match to show
+    // (common case: !fl called right after match ends and completed_at is set)
+    const recentState = await getMostRecentMatchState(msg.groupId);
+    if (recentState) {
+      const lb = await botFetch(`/leaderboard?match_id=${recentState.match_id}&limit=20`);
+      if (lb?.leaderboard?.length) {
+        const matchStatus = lb.match_status ?? "completed";
+        return buildLeaderboard(
+          lb.leaderboard,
+          `${recentState.team_home} vs ${recentState.team_away}`,
+          matchStatus,
+        );
+      }
+    }
+
+    // No recent match with data — fall back to next upcoming match
     const data = await botFetch("/upcoming");
     const next = data?.matches?.find((m: any) =>
       ["scheduled", "open"].includes(m.status) &&
@@ -1392,7 +1631,12 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
     }
   }
 
-  const lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
+  let lb: any;
+  try {
+    lb = await botFetch(`/leaderboard?match_id=${state.match_id}&limit=20`);
+  } catch {
+    return "Network timeout da — 1 nimisham wait panni !fl again try pannu 🔄";
+  }
   if (lb?.error) return "Leaderboard fetch panna mudiyala. Try again!";
   if (!lb?.leaderboard?.length) return "Innum yaarum join pannala da 😅 Join pannu: !fantasy join";
 
@@ -1407,14 +1651,13 @@ async function handleLeaderboard(msg: BotMessage): Promise<string> {
     }
   }
 
-  // Merge Solli Adi bonus into leaderboard
+  // Merge Solli Adi bonus across ALL groups (solli can be played in any group)
   let bonusMap: Map<string, number> | undefined;
   try {
     const { data: rounds } = await supabase
       .from("ba_solli_adi")
       .select("id")
       .eq("match_id", state.match_id)
-      .eq("group_id", msg.groupId)
       .eq("status", "resolved");
     if (rounds?.length) {
       const roundIds = rounds.map((r: any) => r.id);
@@ -1535,6 +1778,16 @@ async function handleViewTeam(msg: BotMessage, args: string): Promise<string> {
   if (hasPoints) {
     out += `\n🏆 Total: *${total_points} pts*`;
     if (rank) out += ` | Rank *#${rank}*`;
+  }
+
+  const now = Date.now();
+  const matchStarted = new Date(state.scheduled_at).getTime() <= now;
+  if (state.locked_at) {
+    out += `\n\n🔒 *Team locked* — edits are frozen (toss happened). This is the final team for scoring.`;
+  } else if (matchStarted) {
+    out += `\n\n⚠️ *Match live* — team editing may be closed. Check ipl11.vercel.app to confirm.`;
+  } else {
+    out += `\n\n✏️ *Edits open* — change your team at ipl11.vercel.app before toss!`;
   }
 
   return out;
@@ -1776,6 +2029,94 @@ function buildHelp(): string {
     `!fantasy sync — Sync playing XI\n\n` +
     `App: ${FANTASY_BASE}`
   );
+}
+
+// ─── Ranking Points (gift voucher challenge) ──────────────────────────────────
+
+/**
+ * Awards per-match ranking points: 1st = N, 2nd = N-1, ... last = 1 (N = participants).
+ * Idempotent — unique constraint on (match_id, player_name) makes re-runs safe.
+ * Returns milestone player name if anyone just crossed 100 cumulative pts.
+ */
+export async function awardRankingPoints(
+  matchId: string,
+  matchLabel: string,
+  sortedPlayers: Array<{ display_name: string }>,
+): Promise<{ milestonePlayer: string | null; rankingLines: string }> {
+  const n = sortedPlayers.length;
+  if (n === 0) return { milestonePlayer: null, rankingLines: "" };
+
+  const rows = sortedPlayers.map((p, i) => ({
+    match_id: matchId,
+    match_label: matchLabel,
+    player_name: p.display_name,
+    rank: i + 1,
+    participants: n,
+    points_awarded: n - i,
+  }));
+
+  await supabase.from("ba_fantasy_ranking").upsert(rows, { onConflict: "match_id,player_name" });
+
+  // Fetch updated cumulative totals
+  const { data: allRows } = await supabase
+    .from("ba_fantasy_ranking")
+    .select("player_name, points_awarded");
+
+  const totals = new Map<string, number>();
+  for (const row of allRows ?? []) {
+    totals.set(row.player_name, (totals.get(row.player_name) ?? 0) + row.points_awarded);
+  }
+
+  // Detect first player to cross 100 this match
+  let milestonePlayer: string | null = null;
+  for (const awarded of rows) {
+    const newTotal = totals.get(awarded.player_name) ?? awarded.points_awarded;
+    const prevTotal = newTotal - awarded.points_awarded;
+    if (prevTotal < 100 && newTotal >= 100) {
+      milestonePlayer = awarded.player_name;
+      break;
+    }
+  }
+
+  const medals = ["🥇", "🥈", "🥉"];
+  let rankingLines = `\n\n🏅 *RANKING POINTS AWARDED* (${n} players)\n`;
+  rows.forEach((r, i) => {
+    const medal = medals[i] ?? `${i + 1}.`;
+    const total = totals.get(r.player_name) ?? r.points_awarded;
+    rankingLines += `${medal} *${r.player_name}* +${r.points_awarded} _(total: ${total}/100)_\n`;
+  });
+  rankingLines += `_🎁 First to 100 ranking pts wins ₹500 gift voucher! Use !win to check standings_`;
+
+  return { milestonePlayer, rankingLines };
+}
+
+async function getRankingLeaderboard(): Promise<string> {
+  const { data } = await supabase
+    .from("ba_fantasy_ranking")
+    .select("player_name, points_awarded");
+
+  if (!data?.length) return "Ranking points illai da — fantasy play panunga first! 😅";
+
+  const totals = new Map<string, number>();
+  for (const row of data) {
+    totals.set(row.player_name, (totals.get(row.player_name) ?? 0) + row.points_awarded);
+  }
+
+  const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const medals = ["🥇", "🥈", "🥉"];
+
+  let msg = `🏆 *FANTASY RANKING LEADERBOARD*\n_🎁 First to 100 pts = ₹500 gift voucher!_\n\n`;
+  sorted.forEach(([name, pts], i) => {
+    const medal = medals[i] ?? `${i + 1}.`;
+    const progress = pts >= 100 ? `🎉 WINNER!` : `${pts}/100`;
+    msg += `${medal} *${name}* — ${pts} pts _(${progress})_\n`;
+  });
+  msg += `\n_Per match: 1st gets N pts, 2nd N-1 … last gets 1 (N = no. of participants)_`;
+  return msg;
+}
+
+export async function handleWinCommand(): Promise<CommandResult> {
+  return { response: await getRankingLeaderboard() };
 }
 
 // ─── Main router ─────────────────────────────────────────────────────────────

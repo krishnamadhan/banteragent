@@ -560,7 +560,7 @@ const TRIVIA_CATEGORIES = ["Tamil Nadu rivers and lakes", "Tamil cinema golden e
 const WYR_THEMES = ["Chennai Metro commute", "Tamil IT office life", "Tamil hostel life", "IPL watching with family", "Tamil YouTube comment wars", "Ooty/Kodai trip mishaps", "Tamil engagement function drama", "Tamil New Year celebrations", "Chennai summer survival", "Tamil marriage sabha food"];
 
 // ===== Get active game for a group =====
-async function getActiveGame(groupId: string, gameType?: string) {
+export async function getActiveGame(groupId: string, gameType?: string) {
   let query = supabase
     .from("ba_game_state")
     .select("*")
@@ -579,7 +579,7 @@ async function getActiveGame(groupId: string, gameType?: string) {
 // ===== Create a new game =====
 const _creatingGame = new Set<string>();
 
-async function createGame(groupId: string, gameType: string, state: object) {
+export async function createGame(groupId: string, gameType: string, state: object) {
   if (_creatingGame.has(groupId)) return null;
   _creatingGame.add(groupId);
   try {
@@ -608,7 +608,7 @@ async function createGame(groupId: string, gameType: string, state: object) {
 }
 
 // ===== Award points =====
-async function awardPoints(
+export async function awardPoints(
   groupId: string,
   playerPhone: string,
   playerName: string,
@@ -1408,6 +1408,12 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
 
     case "wordle":
       return `Wordle answer-ku *!w <word>* type pannu da!\nExample: *!w MERSAL*`;
+
+    case "bantervs":
+    case "bankerrank": {
+      // Handled upstream in router.ts via handlePicksAnswer — should not reach here
+      return "Type !a 1 or !a 2 (battle) or !a <slot> (top10) da.";
+    }
 
     default:
       return "Unknown game type machaan.";

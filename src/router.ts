@@ -19,6 +19,7 @@ import {
 } from "./features/fun.js";
 import { handleNews } from "./features/news.js";
 import { handleBugReport } from "./features/bugs.js";
+import { startBattle, startTop10, handlePicksNext, handlePicksAnswer } from "./features/picks.js";
 import { devlog } from "./devlog.js";
 import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
@@ -31,6 +32,12 @@ import {
   handleSplitCommand, handleSettleCommand, handleHistoryCommand,
   handleDeleteCommand, handleSummaryCommand, expensesHelp,
 } from "./features/expenses/index.js";
+import {
+  handleFund, handleAdd, handleContri, handleApprove,
+  handleDelete as handleConstructionDelete, handleSummary as handleConstructionSummary,
+  handleBalance as handleConstructionBalance, handleHistory as handleConstructionHistory,
+  handleReport, constructionHelp,
+} from "./features/construction/index.js";
 
 function parseCommand(text: string): { command: string; args: string } {
   if (!text.startsWith("!")) return { command: "chat", args: text };
@@ -81,6 +88,34 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     }
   }
 
+  // ── Construction fund tracker — dedicated routing ──────────────────────────
+  if (groupConfig.isConstructionGroup) {
+    switch (command) {
+      case "fund":       return { response: await handleFund(msg, args) };
+      case "add":        return { response: await handleAdd(msg, args) };
+      case "contri":
+      case "contribute":
+      case "contrib":    return { response: await handleContri(msg, args) };
+      case "approve":    return { response: await handleApprove(msg, args) };
+      case "delete":     return { response: await handleConstructionDelete(msg, args) };
+      case "summary":    return { response: await handleConstructionSummary(msg) };
+      case "balance":
+      case "bal":        return { response: await handleConstructionBalance(msg) };
+      case "history":    return { response: await handleConstructionHistory(msg, args) };
+      case "report": {
+        const r = await handleReport(msg);
+        return r.file
+          ? { response: "", mediaFile: r.file, mediaCaption: r.text }
+          : { response: r.text };
+      }
+      case "h":
+      case "help":       return { response: constructionHelp() };
+      case "chat":       return { response: "" }; // ignore free chat in construction group
+      default:
+        return { response: `Unknown command. Send \`!help\` for the full list.` };
+    }
+  }
+
   switch (command) {
     case "h":   // short alias for !help
     case "help":
@@ -89,6 +124,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
 💬 *Chat:* dei claude <message>
 🎮 *Games:*
+  !battle [keyword] — VS bracket battle (group vote)
+  !top10 [keyword] — Blind ranking game (group vote)
+  !next [slot] — Reveal round / lock placement
   !quiz — Tamil movie emoji quiz
   !brandquiz — Guess the Indian brand
   !dialogue — Guess movie from dialogue
@@ -233,8 +271,22 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
       return handleGameCommand("wordle_guess", args, msg);
 
     case "a":      // short alias for !answer
-    case "answer":
+    case "answer": {
+      // Picks games (!battle / !top10) intercept first — no interference with other games
+      const picksReply = await handlePicksAnswer(args, msg);
+      if (picksReply !== null) return { response: picksReply };
       return handleGameCommand("answer", args, msg);
+    }
+
+    // Banter Picks — VS battle & blind ranking
+    case "battle":
+    case "vs":
+      return { response: await startBattle(msg, args) };
+    case "top10":
+    case "blindrank":
+      return { response: await startTop10(msg, args) };
+    case "next":
+      return { response: await handlePicksNext(msg, args) };
 
     // Cricket
     case "cricket":
@@ -566,13 +618,29 @@ Change: ${modeList}` };
       }
 
       if (sub === "snap" || sub === "pic" || sub === "photo") {
-        fetch(`${cosmoBase}/snap-send`, { method: "POST" }).catch(() => {});
-        return { response: "📸 Snapping... sending in a sec!" };
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 10000);
+          const r = await fetch(`${cosmoBase}/snap-send`, { method: "POST", signal: ctrl.signal });
+          clearTimeout(t);
+          if (!r.ok) return { response: `📷 Camera unavailable (${r.status}) — try *!cosmo start* if Cosmo just restarted` };
+        } catch {
+          return { response: "📷 Camera offline — Cosmo can't reach the stream server" };
+        }
+        return { response: "📸 Snap sent!" };
       }
 
       if (sub === "record" || sub === "rec" || sub === "video") {
-        fetch(`${cosmoBase}/record-send`, { method: "POST" }).catch(() => {});
-        return { response: `🎥 Recording ${30}s clip... will send when done (~35s)` };
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 60000);
+          const r = await fetch(`${cosmoBase}/record-send`, { method: "POST", signal: ctrl.signal });
+          clearTimeout(t);
+          if (!r.ok) return { response: `🎥 Recording failed (${r.status}) — camera may be offline` };
+        } catch {
+          return { response: "🎥 Recording timed out or camera offline" };
+        }
+        return { response: "🎥 Clip sent!" };
       }
 
       if (sub === "status") {

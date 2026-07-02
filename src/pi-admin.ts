@@ -216,8 +216,39 @@ async function handlePiCommand(
       break;
     }
 
+    case "cosmo": {
+      const COSMO_LOG = path.join(process.env.HOME ?? "/home/pi", ".robot/logs/action_log.json");
+      const n = Math.min(parseInt(args[0] ?? "20") || 20, 50);
+      if (!fs.existsSync(COSMO_LOG)) {
+        reply = "🤖 No Cosmo reactions logged yet. Is cosmo running? (`!pi status`)";
+        break;
+      }
+      let entries: any[] = [];
+      try {
+        entries = JSON.parse(fs.readFileSync(COSMO_LOG, "utf8"));
+      } catch {
+        reply = "❌ Could not read Cosmo action log.";
+        break;
+      }
+      const recent = entries.slice(-n).reverse(); // newest first
+      if (recent.length === 0) {
+        reply = "🤖 Log file exists but no entries yet.";
+        break;
+      }
+      const TYPE_EMOJI: Record<string, string> = {
+        sound: "🔊", speech: "🗣️", move: "🚶", expr: "👁️", display: "🖥️", servo: "🦾"
+      };
+      const lines = recent.map((e: any) => {
+        const emoji = TYPE_EMOJI[e.output_type] ?? "•";
+        const detail = e.detail ? `: ${e.detail}` : "";
+        return `${e.ts_str}  ${emoji} *${e.output_detail}*\n    📍 ${e.trigger}${detail}`;
+      });
+      reply = `🤖 *Cosmo — Last ${lines.length} Reactions*\n${"━".repeat(20)}\n\n${lines.join("\n\n")}`;
+      break;
+    }
+
     case "help":
-      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n!pi status — Full system report\n!pi temp — CPU temperature\n!pi battery — Battery status\n!pi logs [n] — Last N log lines (default 20)\n!pi errors — Recent error logs\n!pi restart bot — Restart BanterAgent\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + redeploy\n!pi disk — Disk usage\n!pi clean — Safe cleanup (logs + cache)\n!pi network — Network status\n!pi uptime — Pi + bot uptime`;
+      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n!pi status — Full system report\n!pi temp — CPU temperature\n!pi battery — Battery status\n!pi logs [n] — Last N log lines (default 20)\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions (default 20)\n!pi restart bot — Restart BanterAgent\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + redeploy\n!pi disk — Disk usage\n!pi clean — Safe cleanup (logs + cache)\n!pi network — Network status\n!pi uptime — Pi + bot uptime`;
       break;
 
     default:

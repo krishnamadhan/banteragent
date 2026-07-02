@@ -6,3 +6,7 @@ auth/
 .wwebjs_auth/
 .wwebjs_cache/
 qr.png
+data/
+memes/
+weekly-awards/
+supabase/.temp/

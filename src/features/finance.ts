@@ -1,6 +1,6 @@
 /**
  * Daily Finance Update — Gold 22K rate + Nifty 50 with day-over-day diff
- * Data source: Yahoo Finance (free, no API key)
+ * Data source: IBJA (Indian domestic benchmark), Yahoo Finance fallback
  * Cache: ./data/finance-cache.json (persists previous day for diff calc)
  */
 
@@ -43,48 +43,41 @@ async function yahooPrice(symbol: string): Promise<number | null> {
   } catch { return null; }
 }
 
-async function fetchGold22kGRT(): Promise<number | null> {
-  // GRT Jewellers Chennai 22K rate — what Tamil Nadu people actually buy at
+async function fetchGold22kIBJA(): Promise<number | null> {
+  // IBJA (Indian Bullion Jewellers Association) — industry benchmark rate for India
   try {
-    const res = await fetch("https://www.grtjewels.com/gold-rate-today", {
+    const res = await fetch("https://www.ibja.co/", {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html",
       },
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
     const html = await res.text();
-    // Look for 22K price pattern: number with 4-6 digits (₹ amounts like 5430 or 54300)
-    // GRT displays rate as ₹XXXX per gram or as a table cell
-    const patterns = [
-      /22\s*k[^0-9]*?([\d,]+)/i,
-      /22\s*carat[^0-9]*?([\d,]+)/i,
-      /gold[^0-9]*?22[^0-9]*?([\d,]+)/i,
-    ];
-    for (const pat of patterns) {
-      const m = html.match(pat);
-      if (m?.[1]) {
-        const val = parseInt(m[1].replace(/,/g, ""), 10);
-        if (val >= 3000 && val <= 200000) return val; // sanity range ₹3K–₹2L per gram
-      }
+    // IBJA HTML pattern: 22KT">₹ 14521
+    const m = html.match(/22KT[^0-9]*?([\d,]+)/);
+    if (m?.[1]) {
+      const val = parseInt(m[1].replace(/,/g, ""), 10);
+      if (val >= 3000 && val <= 200000) return val;
     }
     return null;
   } catch { return null; }
 }
 
 async function fetchGold22k(): Promise<number | null> {
-  // Try GRT first (Chennai local rate), fall back to Yahoo Finance calculation
-  const grt = await fetchGold22kGRT();
-  if (grt) return grt;
+  // Try IBJA first (Indian domestic benchmark), fall back to Yahoo Finance + India duty adjustment
+  const ibja = await fetchGold22kIBJA();
+  if (ibja) return ibja;
   // Fallback: Gold futures (USD/troy oz) + USD→INR → 22K per gram
+  // Apply ~9% India adjustment for import duty (6%) + GST (3%) to match domestic retail rates
   const [goldUSD, usdINR] = await Promise.all([
     yahooPrice("GC=F"),
     yahooPrice("USDINR=X"),
   ]);
   if (!goldUSD || !usdINR) return null;
   const gold24kPerGram = (goldUSD * usdINR) / 31.1035;
-  return Math.round(gold24kPerGram * (22 / 24));
+  return Math.round(gold24kPerGram * (22 / 24) * 1.09);
 }
 
 async function fetchNifty(): Promise<number | null> {
@@ -131,7 +124,7 @@ export async function sendFinanceUpdate(): Promise<string | null> {
 
   // Build context string for Claude tip
   const goldCtx = gold22k
-    ? `GRT Gold 22K ₹${gold22k.toLocaleString("en-IN")}/g${goldDiff !== null ? ` (${goldDiff >= 0 ? "up" : "down"} ₹${Math.abs(goldDiff).toLocaleString("en-IN")}/g)` : ""}`
+    ? `Gold 22K ₹${gold22k.toLocaleString("en-IN")}/g${goldDiff !== null ? ` (${goldDiff >= 0 ? "up" : "down"} ₹${Math.abs(goldDiff).toLocaleString("en-IN")}/g)` : ""}`
     : "";
   const niftyCtx = nifty
     ? `Nifty 50 ${nifty.toLocaleString("en-IN")}${niftyDiff !== null ? ` (${niftyDiff >= 0 ? "up" : "down"} ${Math.abs(niftyDiff).toLocaleString("en-IN")} pts)` : ""}`
@@ -168,7 +161,7 @@ Output: Just the tip text, nothing else.`
   msg += `_${dateLabel}_\n\n`;
 
   if (gold22k) {
-    msg += `🥇 *GRT Gold 22K:* ₹${gold22k.toLocaleString("en-IN")}/g`;
+    msg += `🥇 *Gold 22K:* ₹${gold22k.toLocaleString("en-IN")}/g`;
     if (goldDiff !== null) msg += `  ${diffLabel(goldDiff, "₹")}`;
     msg += "\n";
   }

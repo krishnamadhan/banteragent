@@ -152,9 +152,10 @@ async function getActiveRound(matchId: string, groupId: string): Promise<Round |
 }
 
 function nextOverIndex(completedOvers: number, balls: number): number {
-  // If at an over boundary (balls=0): the NEXT over is about to start → predict it
-  // If mid-over (balls>0): current over is in progress → predict the one AFTER
-  return balls === 0 ? completedOvers : completedOvers + 1;
+  // Always predict the over AFTER the current/next one.
+  // At boundary (balls=0): the next over may have already started — skip to the one after.
+  // Mid-over (balls>0): current over in progress — predict the one after.
+  return completedOvers + 1;
 }
 
 function overLabel(index: number): number {
