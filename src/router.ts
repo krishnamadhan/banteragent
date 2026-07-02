@@ -541,6 +541,25 @@ Change: ${modeList}` };
       const a = args.trim().toLowerCase().split(/\s+/);
       const sub = a[0] || "";
 
+      // TV ambilight mode — camera samples the TV, strip follows the colour
+      if (sub === "tv" || sub === "ambilight" || sub === "sync") {
+        const on = !(a[1] === "off" || a[1] === "stop" || a[1] === "0");
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 8000);
+          const r = await fetch(`http://127.0.0.1:8000/led/tv`, {
+            method: "POST", headers, body: JSON.stringify({ on }), signal: ctrl.signal });
+          clearTimeout(t);
+          const j: any = await r.json().catch(() => ({}));
+          if (r.ok) return { response: on
+            ? "📺 TV sync *ON* — strip now follows what's on screen. (Cosmo's eye is on TV duty; !led tv off to stop)"
+            : "📺 TV sync *OFF* — strip back to manual." };
+          return { response: `📺 ${j.error || `failed (${r.status})`}` };
+        } catch {
+          return { response: "📺 Couldn't reach Cosmo (:8000). Is cosmo up? !pi status" };
+        }
+      }
+
       let body: { cmd: string; value?: any } | null = null;
       if (sub === "off" || sub === "on") body = { cmd: sub };
       else if (sub === "bright" || sub === "brightness") body = { cmd: "bright", value: parseInt(a[1] || "100") };
@@ -548,7 +567,7 @@ Change: ${modeList}` };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB" };
+        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB\n📺 !led tv on / off — sync strip to the TV" };
       }
       try {
         const ctrl = new AbortController();
