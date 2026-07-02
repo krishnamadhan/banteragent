@@ -142,22 +142,14 @@ const WORDLE_WORDS: { word: string; hint: string }[] = [
 ];
 
 // ===== MEMORY — word pools across categories =====
-const MEMORY_POOLS: Record<string, string[]> = {
-  actors:  ["RAJINI", "VIJAY", "SURIYA", "AJITH", "DHANUSH", "VIKRAM", "KAMAL", "KARTHI", "VISHAL", "SIMBU"],
-  foods:   ["BIRYANI", "IDLI", "DOSAI", "VADAI", "SAMBAR", "RASAM", "HALWA", "PONGAL", "THAYIR", "PAROTTA"],
-  cities:  ["CHENNAI", "MADURAI", "KOVAI", "TRICHY", "SALEM", "VELLORE", "TIRUNELVELI", "ERODE", "DINDIGUL", "KARUR"],
-  movies:  ["ROJA", "BEAST", "MERSAL", "VIKRAM", "DARBAR", "SINGAM", "MASTER", "GHILLI", "PETTA", "THERI"],
-  words:   ["VANAKKAM", "NANDRI", "AMMA", "APPA", "THAMBI", "AKKA", "MACHAAN", "SERI", "ENNA", "AAMA"],
-};
-
 // ===== Persistent answer archive — file cache + Supabase backend =====
 // File = fast in-session cache. Supabase = ground truth across restarts/redeployments.
-type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "memory" | "wordle" | "mostlikely" | "riddle" | "tamilproverb" | "songlyric" | "wyr" | "storytime";
+type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "wordle" | "mostlikely" | "riddle" | "songlyric" | "wyr" | "storytime" | "detective";
 type ArchiveMap = Record<string, Partial<Record<GameType, string[]>>>;
 
 // TTL in days for Claude-generated games (undefined = permanent static-pool game)
 const TTL_DAYS: Partial<Record<GameType, number>> = {
-  riddle: 7, tamilproverb: 7, songlyric: 7, wyr: 7,
+  riddle: 7, songlyric: 7, wyr: 7, detective: 7,
 };
 
 const ARCHIVE_DIR = join(process.cwd(), "data");
@@ -234,11 +226,10 @@ export function getArchiveStats(groupId: string): Array<{ type: string; used: nu
     dialogue: CURATED_DIALOGUES.length,
     twotruthsonelie: TWO_TRUTHS_ONE_LIE.length,
     mostlikely: MOSTLIKELY_SCENARIOS.length,
-    memory: Object.keys(MEMORY_POOLS).length,
     storytime: STORY_STARTERS.length,
     riddle: RIDDLE_CATEGORIES.length,
-    tamilproverb: "∞",
     songlyric: "∞",
+    detective: "∞",
     wyr: WYR_THEMES.length,
   };
   const results: Array<{ type: string; used: number; total: number | string }> = [];
@@ -978,82 +969,6 @@ async function handleWordleGuess(args: string, msg: BotMessage): Promise<string>
   return `${board}\n\n_${remaining} guess${remaining > 1 ? "es" : ""} remaining — Type *!w <word>*_`;
 }
 
-// ===== MEMORY — Memorize and recall a sequence of words =====
-async function startMemory(msg: BotMessage): Promise<string> {
-  const allCategories = Object.keys(MEMORY_POOLS);
-  const archivedMem = getArchived(msg.groupId, "memory");
-  let avail_mem = allCategories.filter(c => !archivedMem.includes(c.toLowerCase()));
-  if (avail_mem.length === 0) { resetArchive(msg.groupId, "memory"); avail_mem = allCategories; }
-  const category = randPick(avail_mem)!;
-  const pool = MEMORY_POOLS[category]!;
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  const words = shuffled.slice(0, 5);
-
-  archiveAnswer(msg.groupId, "memory", category.toLowerCase());
-  await createGame(msg.groupId, "memory", {
-    category,
-    words,
-    attempts: 0,
-  });
-
-  const wordList = words.map((w, i) => `${i + 1}. *${w}*`).join("\n");
-  const showText = `🧠 *MEMORY GAME — ${category.toUpperCase()}*\n\nMemorize these 5 words:\n\n${wordList}\n\n_⏱️ 15 seconds... then this message disappears!_`;
-  const recallText = `💥 *Gone!* Now recall from memory:\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
-
-  // Send the words message directly so we can delete it after 15 seconds
-  try {
-    const { getClient } = await import("../index.js");
-    const client = getClient();
-    if (!client) throw new Error("client not ready");
-
-    const sentMsg = await client.sendMessage(msg.groupId, showText);
-    const msgId = sentMsg?.id?._serialized;
-
-    setTimeout(async () => {
-      // Attempt deletion — try direct method first, then puppeteer fallback
-      let deleted = false;
-      try {
-        await sentMsg.delete(true);
-        deleted = true;
-      } catch (e) {
-        console.error("[memory] delete(true) failed, trying puppeteer fallback:", e);
-      }
-
-      if (!deleted && msgId && client.pupPage) {
-        try {
-          await client.pupPage.evaluate(async ({ chatId, serialized }: { chatId: string; serialized: string }) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const g = globalThis as any;
-            const chat = g.Store.Chat.get(chatId);
-            const m    = g.Store.Msg.get(serialized);
-            if (chat && m) await g.Store.Cmd.sendRevokeMsgs(chat, [m]);
-          }, { chatId: msg.groupId, serialized: msgId });
-          deleted = true;
-        } catch (e2) {
-          console.error("[memory] puppeteer revoke failed:", e2);
-        }
-      }
-
-      // Always send recall prompt regardless of deletion success
-      try {
-        const recall = deleted
-          ? recallText
-          : `💥 *(Scroll up fast!)* Now recall from memory:\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
-        await client.sendMessage(msg.groupId, recall);
-      } catch (e) {
-        console.error("[memory] recall prompt failed:", e);
-      }
-    }, 15_000);
-
-    return ""; // already sent — listener will skip empty response
-  } catch (e) {
-    console.error("[memory] direct send failed, falling back:", e);
-  }
-
-  // Fallback: let listener send it (no deletion)
-  return `🧠 *MEMORY GAME*\n\nMemorize these 5 *${category.toUpperCase()}*:\n\n${wordList}\n\nType *!a <all 5 words>* — First correct wins *20 points*! ⚡`;
-}
-
 // ===== HANDLE ANSWER =====
 async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
   const game = await getActiveGame(msg.groupId);
@@ -1212,13 +1127,11 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
       return `❌ Nope da! Statement ${state.lieIndex} was the LIE.\n\n${state.explanation}\n\nType *!2t1l* for next round.`;
     }
 
-    case "riddle":
-    case "tamilproverb": {
-      const isProverb = game.game_type === "tamilproverb";
+    case "riddle": {
       if (fuzzyMatch(answer, state.answer)) {
         await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
         await awardPoints(msg.groupId, msg.from, msg.senderName, game.game_type, 12);
-        const label = isProverb ? `Meaning: *${state.answer}*` : `Answer: *${state.answer}*`;
+        const label = `Answer: *${state.answer}*`;
         return `✅ Correct da ${msg.senderName}! 🎉 +12 points!\n\n${label}\n\nType !${game.game_type} for next one.`;
       }
       state.attempts = (state.attempts ?? 0) + 1;
@@ -1233,6 +1146,28 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
       }
       await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
       return `❌ Wrong! Try again (${state.attempts}/6)`;
+    }
+
+    case "detective": {
+      if (fuzzyMatch(answer, state.answer)) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        await awardPoints(msg.groupId, msg.from, msg.senderName, "detective", 15);
+        const tellLine = state.tell ? `\n🔍 _${state.tell}_` : "";
+        return `🕵️ *CASE CLOSED!* ${msg.senderName} correct-a kandupudichitaanga! 👏\n\nKutravali: *${state.answer}*${tellLine}\n+15 points!\n\nType !detective for the next case.`;
+      }
+      state.attempts = (state.attempts ?? 0) + 1;
+      if (state.attempts >= 2 && !state.hintGiven && state.hint) {
+        state.hintGiven = true;
+        await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
+        return `❌ Illa da, innocent person-a arrest panra! 🚔\nHint: ${state.hint}`;
+      }
+      if (state.attempts >= 5) {
+        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
+        const tellLine = state.tell ? `\n🔍 _${state.tell}_` : "";
+        return `📁 *CASE UNSOLVED!* Kutravali escape: *${state.answer}*${tellLine}\n\nCBI-ku call pannunga 😔 Type !detective for next case.`;
+      }
+      await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
+      return `❌ Wrong arrest da! Evidence illa. (${state.attempts}/5)`;
     }
 
     case "fastfinger": {
@@ -1383,29 +1318,6 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
       return `❌ Wrong! Try again. (Attempt ${state.attempts}/6)`;
     }
 
-    case "memory": {
-      const required = (state.words as string[]).map(w => w.toUpperCase());
-      const typed = rawAnswer.toUpperCase().split(/[\s,]+/).filter(Boolean);
-      const allCorrect = required.every(w => typed.includes(w));
-
-      if (allCorrect) {
-        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
-        await awardPoints(msg.groupId, msg.from, msg.senderName, "memory", 20);
-        return `🧠 *${msg.senderName} remembered all ${required.length}!* 🏆\n\nWords were: ${required.join(", ")}\n+20 points! Type !memory for next round.`;
-      }
-
-      const missed = required.filter(w => !typed.includes(w));
-      state.attempts = (state.attempts ?? 0) + 1;
-
-      if (state.attempts >= 5) {
-        await supabase.from("ba_game_state").update({ is_active: false }).eq("id", game.id);
-        return `⏰ Game over! Words were: ${required.join(", ")}\nType !memory for a new round.`;
-      }
-
-      await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
-      return `❌ Close! Missed: *${missed.join(", ")}* — Try again! (${state.attempts}/5)`;
-    }
-
     case "wordle":
       return `Wordle answer-ku *!w <word>* type pannu da!\nExample: *!w MERSAL*`;
 
@@ -1456,6 +1368,63 @@ HINT: <one more clue that narrows it down without giving it away>`
   archiveAnswer(msg.groupId, "riddle", cat!.toLowerCase());
   await createGame(msg.groupId, "riddle", { riddle, answer: answer.toLowerCase(), hint: hint ?? "", attempts: 0, hintGiven: false });
   return `🧩 *RIDDLE TIME*\n\n${riddle}\n\n_Type *!a <answer>* to guess_\n3 wrong attempts → hint varum!`;
+}
+
+// ===== DETECTIVE — Solve the petty crime (v2 game) =====
+const DETECTIVE_CRIMES = [
+  "someone ate the last piece of biryani at a family function",
+  "someone left the group voice call without saying bye",
+  "someone leaked the surprise birthday plan",
+  "someone gave the movie ending spoiler in another group",
+  "someone finished the office coffee powder and refilled with chicory only",
+  "someone returned a borrowed power bank at 3% charge",
+  "someone voted 'no' anonymously on the Goa trip poll",
+  "someone put an onion in the sambar when amma clearly said no onion",
+  "someone set the AC to 28 degrees in the middle of Chennai summer",
+  "someone forwarded the private meme to the family group",
+];
+
+async function startDetective(msg: BotMessage): Promise<string> {
+  const archivedDet = getArchived(msg.groupId, "detective");
+  let crime_pool = DETECTIVE_CRIMES.filter(c => !archivedDet.includes(c.toLowerCase().slice(0, 50)));
+  if (crime_pool.length === 0) { resetArchive(msg.groupId, "detective"); crime_pool = DETECTIVE_CRIMES; }
+  const crime = randPick(crime_pool)!;
+
+  const content = await generateStructured(
+    `Create a funny 60-second WhatsApp detective mystery in Tanglish (Tamil in English letters).
+THE CRIME: ${crime}
+
+Write 3 suspects (common Tamil names, NOT names of real people in any group), each with a one-line
+alibi/statement. Exactly ONE is guilty. The guilty one's statement must contain a subtle logical
+slip a sharp reader can catch (mentions a detail only the culprit would know, alibi contradicts
+a scene fact, etc). Keep the whole thing SHORT and funny — Crime Patrol parody energy.
+
+Format ONLY (no extra text):
+SCENE: <2-3 line Tanglish scene setup of the crime>
+S1: <Name> — <one-line statement>
+S2: <Name> — <one-line statement>
+S3: <Name> — <one-line statement>
+GUILTY: <exact name of guilty suspect>
+TELL: <one line explaining the logical slip>
+HINT: <one nudge that points at the slip without naming the suspect>`
+  );
+
+  const scene  = content.match(/SCENE:\s*(.+?)(?=\nS1:)/s)?.[1]?.trim();
+  const s1     = content.match(/S1:\s*(.+)/)?.[1]?.trim();
+  const s2     = content.match(/S2:\s*(.+)/)?.[1]?.trim();
+  const s3     = content.match(/S3:\s*(.+)/)?.[1]?.trim();
+  const guilty = content.match(/GUILTY:\s*(.+)/)?.[1]?.trim();
+  const tell   = content.match(/TELL:\s*(.+)/)?.[1]?.trim();
+  const hint   = content.match(/HINT:\s*(.+)/)?.[1]?.trim();
+
+  if (!scene || !s1 || !s2 || !s3 || !guilty) return "Case file corrupt aagiduchu da, !detective again try pannu.";
+
+  archiveAnswer(msg.groupId, "detective", crime.toLowerCase().slice(0, 50));
+  await createGame(msg.groupId, "detective", {
+    answer: guilty.toLowerCase(), tell: tell ?? "", hint: hint ?? "", attempts: 0, hintGiven: false,
+  });
+
+  return `🕵️ *DETECTIVE DA!*\n\n${scene}\n\n*Suspects:*\n1️⃣ ${s1}\n2️⃣ ${s2}\n3️⃣ ${s3}\n\n_Yaaru kutravali? Type *!a <name>*_\n+15 points for the sharp eye 👁`;
 }
 
 // ===== FAST FINGER FIRST — First to type the word wins =====
@@ -1669,28 +1638,6 @@ async function startMostLikely(msg: BotMessage): Promise<string> {
 }
 
 // ===== TAMIL PROVERB CHALLENGE =====
-async function startTamilProverb(msg: BotMessage): Promise<string> {
-  const content = await generateStructured(
-    `Generate a Tamil proverb (thirukkural or folk proverb) that is well-known and has practical modern meaning.
-Format ONLY:
-PROVERB: <proverb in Tanglish/Tamil transliteration>
-MEANING: <short English meaning — the core wisdom, 1 sentence>
-HINT: <hint about the context/situation it applies to, without giving away the meaning>`
-  );
-
-  const proverb = content.match(/PROVERB:\s*(.+)/)?.[1]?.trim();
-  const meaning = content.match(/MEANING:\s*(.+)/)?.[1]?.trim();
-  const hint = content.match(/HINT:\s*(.+)/)?.[1]?.trim();
-
-  if (!proverb || !meaning) return "Proverb generate panna mudiyala. Try again!";
-
-  archiveAnswer(msg.groupId, "tamilproverb", proverb.toLowerCase().slice(0, 60));
-  await createGame(msg.groupId, "tamilproverb", {
-    proverb, answer: meaning.toLowerCase(), hint: hint ?? "", attempts: 0, hintGiven: false,
-  });
-  return `📜 *TAMIL PROVERB CHALLENGE*\n\n"${proverb}"\n\nInnaa meaning? Type *!a <meaning>*\n3 wrong attempts → hint varum!`;
-}
-
 // ===== STORY TIME — Collaborative story building =====
 const STORY_STARTERS = [
   "Madhu NEET exam centre-ku pona naal — hall ticket check pannaa, wrong city-la irundha. Exam 20 minutes later.",
@@ -2134,7 +2081,7 @@ async function startTwoTruthsOneLie(msg: BotMessage): Promise<string> {
 }
 
 // ===== MAIN HANDLER =====
-const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","tamilproverb","proverb","storytime","story","dialogue","song","wordle","memory","songlyric","wyr","wordchain","antakshari","trivia"]);
+const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","detective","storytime","story","dialogue","song","wordle","songlyric","wyr","wordchain","antakshari","trivia"]);
 
 export async function handleGameCommand(
   command: string,
@@ -2177,9 +2124,8 @@ export async function handleGameCommand(
     case "2t1l":
       response = await startTwoTruthsOneLie(msg);
       break;
-    case "tamilproverb":
-    case "proverb":
-      response = await startTamilProverb(msg);
+    case "detective":
+      response = await startDetective(msg);
       break;
     case "storytime":
     case "story":
@@ -2196,9 +2142,6 @@ export async function handleGameCommand(
       break;
     case "wordle_guess":
       response = await handleWordleGuess(args, msg);
-      break;
-    case "memory":
-      response = await startMemory(msg);
       break;
     case "songlyric":
       response = await startSongLyric(msg);

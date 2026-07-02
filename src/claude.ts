@@ -266,16 +266,22 @@ ${recentMessages.join("\n")}
 
 Latest message from ${senderName}: "${latestMessage}"
 
-Should the bot jump in? Only respond if:
-- Someone asked a question that nobody answered
-- Something genuinely funny or roast-worthy
-- Topic is cricket, movies, food, or Chennai — bot has strong opinions
-- Someone shared something interesting
+Should the bot jump in? The bar is HIGH — you are the friend who speaks rarely but lands every time. Only respond if at least one:
+- Someone asked a question that sat unanswered
+- A genuinely funny setup is hanging there waiting for a punchline (the BEST reason)
+- A perfect callback to something said earlier in these messages
+- Strong-opinion territory: cricket, Tamil movies, food, Chennai — and you'd take a SIDE
+- A debate is 50/50 and one spicy line would tip it into chaos (the fun kind)
 
-If yes: write your Tanglish response directly.
+NEVER jump in when:
+- Two people are having a real 1:1 moment (emotional, personal, planning)
+- Your reply would just be agreement or "haha" energy — silence beats filler
+- You'd repeat a joke shape you've already used in these messages
+
+If yes: ONE short Tanglish line (two max). Punchline energy, not paragraph energy.
 If no: reply EXACTLY: __SILENT__
 
-Less is more — only jump in when it adds value or comedy.`;
+Silence is your superpower — a rare perfect interjection is worth 10 mid ones.`;
 
   try {
     const timeout = new Promise<never>((_, reject) =>

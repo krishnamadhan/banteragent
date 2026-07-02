@@ -97,12 +97,22 @@ async function taskMorningRoast(groupId: string) {
   if (!await isEnabled("morning_roast", groupId)) return;
 
   const days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  const today = days[new Date().getDay()];
+  const dayIdx = new Date().getDay();
+  const today = days[dayIdx];
 
-  const msg = await generateContent(
-    `It's ${today} morning. Write a funny Tanglish good morning message for a WhatsApp group. NOT the typical "Good Morning" uncle forward. Sarcastic about ${today}. Include one Tamil movie reference. End with a savage line about someone probably still sleeping. Max 5 lines.`
-  );
-  const out = `☀️ *MORNING ROAST*\n\n${msg}`;
+  // v2: rotate the morning format by weekday so it never goes stale
+  const formats: Array<{ tag: string; prompt: string }> = [
+    { tag: "☀️ *SUNDAY SERMON*",     prompt: `It's Sunday morning. Write a mock-serious Tanglish "life advice sermon" for the group — paati/thatha wisdom energy but the advice is hilariously lazy (justify doing nothing today). One Tamil movie reference. Max 5 lines.` },
+    { tag: "📰 *MONDAY BREAKING NEWS*", prompt: `It's Monday morning. Write a fake Tanglish "breaking news" bulletin announcing that Monday has been spotted approaching the group. News-anchor drama, Sun News energy. End with a savage line about whoever is still sleeping. Max 5 lines.` },
+    { tag: "🔮 *TUESDAY PREDICTION*",  prompt: `It's Tuesday morning. Write a Tanglish astrologer-parody prediction for the group's week — absurdly specific fake predictions (someone will order biryani and regret it, someone's crush will leave them on seen). NO real zodiac signs. Max 5 lines.` },
+    { tag: "🎬 *WEDNESDAY TRAILER*",   prompt: `It's Wednesday morning. Narrate the group's day ahead as a Tanglish Tamil movie trailer voiceover — over-dramatic, "intha vaaram... oru group... " energy, cut-scenes of mundane office life as action sequences. Max 5 lines.` },
+    { tag: "💌 *THURSDAY APPRECIATION*", prompt: `It's Thursday morning. Write a warm but funny Tanglish appreciation post hyping up this friend group — genuinely sweet core, wrapped in comedy (compare the group to a badly-run but beloved mess hotel). Max 5 lines.` },
+    { tag: "🎉 *FRIDAY FEELING*",      prompt: `It's Friday morning. Write a Tanglish celebration message — Friday hype like it's a festival day, weekend plans propaganda, one Tamil movie reference. End by demanding weekend plans from the group. Max 5 lines.` },
+    { tag: "😴 *SATURDAY STATUS*",     prompt: `It's Saturday morning. Write a lazy Tanglish morning message — the bot itself is half asleep, typing effort is minimal, judges anyone doing anything productive today. Max 4 lines.` },
+  ];
+  const f = formats[dayIdx]!;
+  const msg = await generateContent(f.prompt);
+  const out = `${f.tag}\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
   addRecentMessage(`[Bot]: ${out}`);

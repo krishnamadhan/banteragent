@@ -76,6 +76,7 @@ const REGISTRY: GroupConfig[] = [
       roast:   { description: "🔥 ROAST MODE — Default. Savage lovingly." },
       nanban:  { description: "🤝 NANBAN MODE — Warm nanban energy. Pure support, zero roast." },
       peter:   { description: "🎓 PETER MODE — Broken English, over-explains everything, very much sophisticated itself." },
+      paati:   { description: "👵 PAATI MODE — Group's adopted grandmother. Scolds with love, feeds with words, judges your life choices." },
     },
     // fantasy/f11/fl/win: IPL off-season — remove from this set next season
     disabledCommands: new Set<string>(["fantasy", "f11", "fl", "win"]),

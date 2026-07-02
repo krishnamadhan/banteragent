@@ -131,12 +131,11 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !song — Guess Tamil song from English lyrics
   !wordle — Group Wordle (Tamil movie titles!)
   !w <word> — Submit a Wordle guess
-  !memory — Memorize & recall word sequence
+  !detective — 🕵️ NEW! Solve the petty crime
   !songlyric — Complete the song lyric
   !riddle — Tamil riddle
   !fastfinger (!ff) — First to type wins!
   !mostlikely (!ml) — Most likely to... vote
-  !tamilproverb (!proverb) — Guess the proverb meaning
   !storytime (!story) — Collaborative story
   !wyr — Would You Rather
   !wordchain — Word chain game
@@ -220,17 +219,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
   !fitboard — Weekly fitness leaderboard
 
 ⚙️ *Settings:*
-  !mode roast / nanban / peter
+  !mode roast / nanban / peter / paati 👵
   !mute — Mute bot for 1 hour
   !unmute — Resume bot
-
-🏏 *IPL Fantasy:*
-  !fantasy join — Join group fantasy contest
-  !fantasy lb (!fl) — Live leaderboard
-  !fantasy stats — Top scorer points
-  !fantasy score <player> — Specific player stats
-  !fantasy xi — Playing XI (after toss)
-  !fantasy help — Full fantasy help
 
 🐛 *Feedback:*
   !bug <description> — Report a bug or issue
@@ -254,13 +245,11 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "ff":
     case "mostlikely":
     case "ml":
-    case "tamilproverb":
-    case "proverb":
+    case "detective":
     case "storytime":
     case "story":
     case "twotruthsonelie":
     case "2t1l":
-    case "memory":
     case "score":
       return handleGameCommand(command, args, msg);
 
