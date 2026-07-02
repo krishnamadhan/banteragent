@@ -6,7 +6,7 @@
 > STATUS is `active` or `paused-limit`. Kill switch: `touch ~/.claude-watchdog-disabled`.
 
 STATUS: active
-LAST CHECKPOINT: 2026-07-03 01:35 IST
+LAST CHECKPOINT: 2026-07-03 02:35 IST
 CURRENT OBJECTIVE: continuous-improvement loop (charter below)
 
 ---
@@ -76,6 +76,11 @@ next highest-value item. Amendments to the original prompt (documented reasoning
 - [x] docs/FANTASY_REENABLE.md — 6-step checklist
 - [ ] Usage-data-driven prompt tuning — revisit ~2026-07-06 after real group logs
       accumulate (tone calibration, auto-response hit rate). Deferred: needs live data.
+- [ ] recentMessages buffer is GLOBAL across groups (listener.ts) — with 2 groups active,
+      Banter Squad auto-response context can include Construction messages. Fix: per-group
+      Map keyed by groupId. Touches exported API (listener/task-runner/fun, ~20 call sites)
+      → do SUPERVISED so the bot can be tested after restart, not in an unattended run.
+      Low current impact (Construction doesn't auto-respond/free-chat).
 
 ## Known issues / constraints
 
@@ -138,3 +143,11 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   sharedRules() (Tanglish style); all 4 modes now verified to include the safety floor.
   tsc clean, committed, pushed. Dormant until banteragent restart. Usage-data-driven tuning
   re-queued for ~2026-07-06 (needs live logs). No other Pending items remain actionable now.
+- 2026-07-03 02:35 — (watchdog resume) Sole remaining Pending item (usage-data prompt
+  tuning) is NOT due — dated ~2026-07-06 and needs live group logs that don't exist yet;
+  did NOT fabricate it. Assessed the recentMessages-global-buffer bug: real but low current
+  impact + moderate cross-file API refactor (~20 call sites) → queued as SUPERVISED item,
+  not rushed unattended. Instead did a zero-risk high-value fix: reconciled robot
+  docs/STATE.md (was falsely claiming cosmo REMOVED / LED API down / ambilight inactive —
+  cosmo is online with led_service + fully colour-calibrated ambilight). Pushed to robot
+  repo. banteragent tree untouched this run.
