@@ -305,8 +305,27 @@ export function getPoolStatus(groupId: string): PoolStatus[] {
   });
 }
 
-export function getArchiveStats(groupId: string): PoolStatus[] {
-  return getPoolStatus(groupId);
+export interface ArchiveStat { type: string; used: number; total: number | string; remaining?: number }
+
+export function getArchiveStats(groupId: string): ArchiveStat[] {
+  const finite: ArchiveStat[] = getPoolStatus(groupId);
+  const infinitePools: Partial<Record<GameType, number | string>> = {
+    song: SONG_QUIZ.length,
+    dialogue: CURATED_DIALOGUES.length,
+    twotruthsonelie: TWO_TRUTHS_ONE_LIE.length,
+    mostlikely: MOSTLIKELY_SCENARIOS.length,
+    storytime: STORY_STARTERS.length,
+    riddle: RIDDLE_CATEGORIES.length,
+    songlyric: "∞",
+    detective: "∞",
+    wyr: WYR_THEMES.length,
+  };
+  const others: ArchiveStat[] = Object.entries(infinitePools).map(([type, total]) => ({
+    type,
+    used: getArchived(groupId, type as GameType).length,
+    total: total ?? "∞",
+  }));
+  return [...finite, ...others];
 }
 
 function istDateKey(now = new Date()): string {
@@ -320,7 +339,7 @@ export async function maybeNotifyLowPool(type: FinitePoolGame, remaining: number
   if (sent[key]) return false;
   sent[key] = true;
   writeJsonFile(LOW_POOL_ALERT_PATH, sent);
-  const message = `?? ${type} pool low: ${remaining} left. !refreshgames add ${type}`;
+  const message = `⚠️ ${type} pool low: ${remaining} left. !refreshgames add ${type}`;
   try {
     await fetch("http://127.0.0.1:3099/cosmo-notify", {
       method: "POST",
@@ -487,7 +506,7 @@ export async function refreshGamesAdd(groupId: string, type: RefreshableGame, co
   appendExtraItems(type, accepted);
   const status = type === "anagram" || type === "hangman" ? null : getPoolStatus(groupId).find((s) => s.type === type);
   const remaining = status ? `${status.remaining}/${status.total}` : String(currentPoolItems(type).length);
-  return `? refreshgames add ${type}: added ${accepted.length}, rejected ${rejected.length}, remaining ${remaining}`;
+  return `✅ refreshgames add ${type}: added ${accepted.length}, rejected ${rejected.length}, remaining ${remaining}`;
 }
 
 export async function runGameCheck(type: RefreshableGame, quarantineFailures = false): Promise<GameCheckResult> {

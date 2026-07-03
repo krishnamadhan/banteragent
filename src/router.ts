@@ -479,8 +479,7 @@ Change: ${modeList}` };
         resetArchive(msg.groupId, game === "wordle" ? "wordle500" : game);
         return { response: `OK ${game} archive reset. Existing pool kept; extras still available.` };
       }
-      const confirmArg = args[0]?.toLowerCase();
-      if (confirmArg === "confirm") {
+      if (action === "confirm") {
         const pending = _refreshConfirmPending.get(msg.groupId);
         if (!pending || Date.now() - pending > 60_000) {
           return { response: "Confirm window expired. Send *!refreshgames* again to start." };
@@ -500,7 +499,9 @@ Change: ${modeList}` };
     case "gamestats": {
       const stats = getArchiveStats(msg.groupId);
       const poolColor = (remaining: number) => remaining <= 10 ? "\u{1F534}" : remaining <= 20 ? "\u{1F7E1}" : "\u{1F7E2}";
-      const lines = stats.map(s => `  ${poolColor(s.remaining)} ${s.type}: ${s.used}/${s.total} used, ${s.remaining} left`);
+      const lines = stats.map(s => s.remaining !== undefined
+        ? `  ${poolColor(s.remaining)} ${s.type}: ${s.used}/${s.total} used, ${s.remaining} left`
+        : `  ${s.type}: ${s.used}/${s.total} used`);
       const totalUsed = stats.reduce((n, s) => n + s.used, 0);
       return { response: `📊 *Game Stats*\n――――――――――――――\n${lines.join("\n")}\n――――――――――――――\nTotal played: ${totalUsed}` };
     }
@@ -515,7 +516,7 @@ Change: ${modeList}` };
       if (!game || !games.has(game)) return { response: "Usage: *!gamecheck <game> [quarantine]*" };
       const result = await runGameCheck(game, parts.includes("quarantine"));
       const sample = result.failures.slice(0, 8).map((f) => `- ${f.key}: ${f.reason}`).join("\n");
-      return { response: `?? *Game Check: ${game}*\nChecked: ${result.checked}\nFAIL: ${result.failures.length}${result.quarantined ? `\nQuarantined: ${result.quarantined}` : ""}${sample ? `\n\n${sample}` : ""}` };
+      return { response: `🔍 *Game Check: ${game}*\nChecked: ${result.checked}\nFAIL: ${result.failures.length}${result.quarantined ? `\nQuarantined: ${result.quarantined}` : ""}${sample ? `\n\n${sample}` : ""}` };
     }
 
     case "bug":

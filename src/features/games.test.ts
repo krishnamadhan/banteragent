@@ -128,7 +128,7 @@ test("low pool notify: posts once per game per IST day", async () => {
     assert.equal(await g.maybeNotifyLowPool("wordle", g.LOW_WATERMARK + 1, now), false);
     assert.equal(calls.length, 2);
     assert.equal(calls[0]!.url, "http://127.0.0.1:3099/cosmo-notify");
-    assert.deepEqual(JSON.parse(calls[0]!.init.body), { message: `?? quiz pool low: ${g.LOW_WATERMARK} left. !refreshgames add quiz` });
+    assert.deepEqual(JSON.parse(calls[0]!.init.body), { message: `⚠️ quiz pool low: ${g.LOW_WATERMARK} left. !refreshgames add quiz` });
   } finally {
     globalThis.fetch = oldFetch;
   }
@@ -156,8 +156,8 @@ test("refreshgames add: dedupes, validates, and appends survivors", async () => 
 test("refreshgames add: semantic checker drops Claude failures", async () => {
   const replies = [
     JSON.stringify([
-      { emojis: "??", answer: "pizza", hint: "food clue" },
-      { emojis: "??", answer: "wrong", hint: "Vijay movie clue" },
+      { emojis: "🍕🇮🇹", answer: "pizza", hint: "food clue" },
+      { emojis: "🎬⚔️", answer: "wrong", hint: "Vijay movie clue" },
     ]),
     "0 PASS\n1 FAIL: wrong Vijay movie",
   ];
@@ -169,7 +169,7 @@ test("refreshgames add: semantic checker drops Claude failures", async () => {
 });
 
 test("gamecheck: unparseable semantic response fails closed", async () => {
-  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ quiz: [{ emojis: "??", answer: "movie", hint: "cinema clue" }] }));
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ quiz: [{ emojis: "🎬🍿", answer: "movie", hint: "cinema clue" }] }));
   g.setGameTestHooks({ generateStructured: async () => "not parseable" });
   const result = await g.runGameCheck("quiz", false);
   assert.ok(result.failures.some(f => f.key === "movie" && f.reason.includes("unparseable")));
