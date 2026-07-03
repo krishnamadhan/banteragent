@@ -590,6 +590,44 @@ Change: ${modeList}` };
         }
       }
 
+      // Scene presets (hands-free ambiance)
+      const SCENES = ["movie", "chill", "night", "focus", "reading", "romance", "party"];
+      if (SCENES.includes(sub)) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 16000);
+          const r = await fetch(`http://127.0.0.1:8000/led/scene`, {
+            method: "POST", headers, body: JSON.stringify({ scene: sub }), signal: ctrl.signal });
+          clearTimeout(t);
+          const j: any = await r.json().catch(() => ({}));
+          if (r.ok) return { response: `🎬 Scene *${sub}* set.` };
+          return { response: `🎬 ${j.error || `failed (${r.status})`}` };
+        } catch {
+          return { response: "🎬 Couldn't reach Cosmo (:8000)." };
+        }
+      }
+
+      // Status / health
+      if (sub === "status" || sub === "health") {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 6000);
+          const [s, h] = await Promise.all([
+            fetch(`http://127.0.0.1:8000/led`, { headers, signal: ctrl.signal }).then(r => r.json()),
+            fetch(`http://127.0.0.1:8000/led/health`, { headers, signal: ctrl.signal }).then(r => r.json()),
+          ]);
+          clearTimeout(t);
+          const st: any = s, he: any = h;
+          const conn = he.connected ? "✅ connected" : "🚨 offline";
+          const sync = st.tv_sync ? "📺 TV sync ON" : "manual";
+          const scene = st.scene ? ` · scene: ${st.scene}` : "";
+          const cal = st.roi_active ? "✅" : "❌ not calibrated";
+          return { response: `💡 *LED strip*\n${conn} · ${st.on ? "on" : "off"} @ ${st.brightness}%${scene}\nmode: ${sync}\ncalibrated: ${cal}\nwrites: ${he.writes_ok} ok / ${he.writes_fail} fail${he.last_error ? `\nlast error: ${he.last_error}` : ""}` };
+        } catch {
+          return { response: "💡 Couldn't reach Cosmo (:8000)." };
+        }
+      }
+
       let body: { cmd: string; value?: any } | null = null;
       if (sub === "off" || sub === "on") body = { cmd: sub };
       else if (sub === "bright" || sub === "brightness") body = { cmd: "bright", value: parseInt(a[1] || "100") };
@@ -597,7 +635,7 @@ Change: ${modeList}` };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on\n!led bright <0-100>\n!led 255 0 128 — raw RGB\n🎯 !led calibrate — show full red TV screen, detect boundaries, send marked image\n📺 !led tv on / off — sync strip to the TV" };
+        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n📺 !led tv on / off — sync strip to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
       }
       try {
         const ctrl = new AbortController();
