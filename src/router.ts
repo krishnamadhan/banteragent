@@ -476,7 +476,8 @@ Change: ${modeList}` };
 
     case "gamestats": {
       const stats = getArchiveStats(msg.groupId);
-      const lines = stats.map(s => `  ${s.type}: ${s.used}/${s.total}`);
+      const poolColor = (remaining: number) => remaining <= 10 ? "??" : remaining <= 20 ? "??" : "??";
+      const lines = stats.map(s => `  ${poolColor(s.remaining)} ${s.type}: ${s.used}/${s.total} used, ${s.remaining} left`);
       const totalUsed = stats.reduce((n, s) => n + s.used, 0);
       return { response: `📊 *Game Stats*\n――――――――――――――\n${lines.join("\n")}\n――――――――――――――\nTotal played: ${totalUsed}` };
     }

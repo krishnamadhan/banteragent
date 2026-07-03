@@ -97,3 +97,39 @@ test("archive: a fresh pick never repeats an archived item until pool exhausts",
   }
   assert.equal(new Set(picked).size, pool.length); // no repeats across the full pool
 });
+
+
+test("pool status: finite curated pools report total used remaining", () => {
+  const gid = "gtest-status";
+  g.archiveAnswer(gid, "quiz", "kaththi");
+  g.archiveAnswer(gid, "wordle500", "about");
+  const stats = g.getPoolStatus(gid);
+  assert.deepEqual(stats.map(s => s.type), ["quiz", "brandquiz", "trivia", "fastfinger", "wordle"]);
+  const quiz = stats.find(s => s.type === "quiz")!;
+  const wordle = stats.find(s => s.type === "wordle")!;
+  assert.equal(quiz.used, 1);
+  assert.equal(quiz.remaining, quiz.total - 1);
+  assert.equal(wordle.used, 1);
+  assert.equal(wordle.remaining, wordle.total - 1);
+});
+
+test("low pool notify: posts once per game per IST day", async () => {
+  const calls: Array<{ url: unknown; init: any }> = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => {
+    calls.push({ url, init });
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  try {
+    const now = new Date("2026-07-03T10:00:00.000Z");
+    assert.equal(await g.maybeNotifyLowPool("quiz", g.LOW_WATERMARK, now), true);
+    assert.equal(await g.maybeNotifyLowPool("quiz", g.LOW_WATERMARK - 1, now), false);
+    assert.equal(await g.maybeNotifyLowPool("trivia", g.LOW_WATERMARK, now), true);
+    assert.equal(await g.maybeNotifyLowPool("wordle", g.LOW_WATERMARK + 1, now), false);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.url, "http://127.0.0.1:3099/cosmo-notify");
+    assert.deepEqual(JSON.parse(calls[0]!.init.body), { message: `?? quiz pool low: ${g.LOW_WATERMARK} left. !refreshgames add quiz` });
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});

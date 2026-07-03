@@ -157,6 +157,8 @@ const TTL_DAYS: Partial<Record<GameType, number>> = {
 // also skip the best-effort Supabase mirror (tests run offline).
 const ARCHIVE_DIR = process.env.BANTERAGENT_DATA_DIR || join(process.cwd(), "data");
 const ARCHIVE_PATH = join(ARCHIVE_DIR, "used-answers.json");
+const LOW_POOL_ALERT_PATH = join(ARCHIVE_DIR, "low-pool-alerts.json");
+export const LOW_WATERMARK = Number.parseInt(process.env.GAME_LOW_WATERMARK ?? "10", 10);
 const ARCHIVE_REMOTE = !process.env.BANTERAGENT_DATA_DIR;
 
 if (!existsSync(ARCHIVE_DIR)) mkdirSync(ARCHIVE_DIR, { recursive: true });
@@ -166,7 +168,17 @@ let _ttlArchive: ArchiveMap = {}; // TTL games -- memory-only (synced from Supab
 try { _archive = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8")); } catch {}
 
 function saveArchive(): void {
+  try { mkdirSync(ARCHIVE_DIR, { recursive: true }); } catch {}
   try { writeFileSync(ARCHIVE_PATH, JSON.stringify(_archive, null, 2), "utf8"); } catch {}
+}
+
+function readJsonFile<T>(path: string, fallback: T): T {
+  try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return fallback; }
+}
+
+function writeJsonFile(path: string, value: unknown): void {
+  try { mkdirSync(ARCHIVE_DIR, { recursive: true }); } catch {}
+  try { writeFileSync(path, JSON.stringify(value, null, 2), "utf8"); } catch {}
 }
 
 export function getArchived(groupId: string, type: GameType): string[] {
@@ -219,29 +231,64 @@ export async function clearGroupArchive(groupId: string): Promise<void> {
     .then(({ error }) => { if (error) console.error("[archive] clear:", error.message); });
 }
 
-export function getArchiveStats(groupId: string): Array<{ type: string; used: number; total: number | string }> {
-  const pools: Partial<Record<GameType, number | string>> = {
-    quiz: CURATED_QUIZZES.length,
-    brandquiz: CURATED_BRAND_QUIZZES.length,
-    trivia: CURATED_TRIVIA.length,
-    song: SONG_QUIZ.length,
-    wordle: WORDLE_WORDS.length,
-    fastfinger: FASTFINGER_WORDS.length,
-    dialogue: CURATED_DIALOGUES.length,
-    twotruthsonelie: TWO_TRUTHS_ONE_LIE.length,
-    mostlikely: MOSTLIKELY_SCENARIOS.length,
-    storytime: STORY_STARTERS.length,
-    riddle: RIDDLE_CATEGORIES.length,
-    songlyric: "∞",
-    detective: "∞",
-    wyr: WYR_THEMES.length,
-  };
-  const results: Array<{ type: string; used: number; total: number | string }> = [];
-  for (const [type, total] of Object.entries(pools)) {
-    const used = getArchived(groupId, type as GameType).length;
-    results.push({ type, used, total: total ?? "∞" });
+export type FinitePoolGame = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "wordle";
+
+export interface PoolStatus {
+  type: FinitePoolGame;
+  total: number;
+  used: number;
+  remaining: number;
+}
+
+function getPoolKeys(type: FinitePoolGame): string[] {
+  switch (type) {
+    case "quiz": return CURATED_QUIZZES.map((q) => q.answer.toLowerCase());
+    case "brandquiz": return CURATED_BRAND_QUIZZES.map((q) => q.answer.toLowerCase());
+    case "trivia": return CURATED_TRIVIA.map((q) => q.answer.toLowerCase());
+    case "fastfinger": return FASTFINGER_WORDS.map((w) => w.toLowerCase());
+    case "wordle": return WORDLE500.map((w) => w.toLowerCase());
   }
-  return results;
+}
+
+function archiveTypeForPool(type: FinitePoolGame): GameType {
+  return type === "wordle" ? "wordle500" : type;
+}
+
+export function getPoolStatus(groupId: string): PoolStatus[] {
+  return (["quiz", "brandquiz", "trivia", "fastfinger", "wordle"] as const).map((type) => {
+    const keys = new Set(getPoolKeys(type));
+    const used = getArchived(groupId, archiveTypeForPool(type)).filter((answer) => keys.has(answer.toLowerCase())).length;
+    const total = keys.size;
+    return { type, total, used, remaining: Math.max(total - used, 0) };
+  });
+}
+
+export function getArchiveStats(groupId: string): PoolStatus[] {
+  return getPoolStatus(groupId);
+}
+
+function istDateKey(now = new Date()): string {
+  return new Date(now.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export async function maybeNotifyLowPool(type: FinitePoolGame, remaining: number, now = new Date()): Promise<boolean> {
+  if (remaining > LOW_WATERMARK) return false;
+  const key = `${type}:${istDateKey(now)}`;
+  const sent = readJsonFile<Record<string, boolean>>(LOW_POOL_ALERT_PATH, {});
+  if (sent[key]) return false;
+  sent[key] = true;
+  writeJsonFile(LOW_POOL_ALERT_PATH, sent);
+  const message = `?? ${type} pool low: ${remaining} left. !refreshgames add ${type}`;
+  try {
+    await fetch("http://127.0.0.1:3099/cosmo-notify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+  } catch (e) {
+    console.warn("[games] low-pool notify failed:", e);
+  }
+  return true;
 }
 
 // Call once on bot startup -- loads Supabase archive into caches (handles wipe/redeployment)
@@ -676,6 +723,7 @@ async function startQuiz(msg: BotMessage): Promise<string> {
     resetArchive(msg.groupId, "quiz");
     pool = CURATED_QUIZZES;
   }
+  const remainingBeforePick = pool.length;
   const quiz = randPick(pool);
 
   const state = {
@@ -687,6 +735,7 @@ async function startQuiz(msg: BotMessage): Promise<string> {
   };
 
   archiveAnswer(msg.groupId, "quiz", state.answer); // archive before await to prevent race-condition duplicates
+  void maybeNotifyLowPool("quiz", remainingBeforePick - 1);
   await createGame(msg.groupId, "quiz", state);
 
   return `🎬 *TAMIL MOVIE QUIZ*\n\nGuess the movie: ${state.emojis}\n\nType *!a <movie name>* to answer\n3 wrong attempts-ku appuram hint varum!`;
@@ -700,6 +749,7 @@ async function startBrandQuiz(msg: BotMessage): Promise<string> {
     resetArchive(msg.groupId, "brandquiz");
     pool = CURATED_BRAND_QUIZZES;
   }
+  const remainingBeforePick = pool.length;
   const quiz = randPick(pool);
 
   const state = {
@@ -711,6 +761,7 @@ async function startBrandQuiz(msg: BotMessage): Promise<string> {
   };
 
   archiveAnswer(msg.groupId, "brandquiz", state.answer);
+  void maybeNotifyLowPool("brandquiz", remainingBeforePick - 1);
   await createGame(msg.groupId, "brandquiz", state);
 
   return `🏷️ *BRAND QUIZ*\n\nEnnaa brand? ${state.emojis}\n\nType *!a <brand name>* to answer\n3 wrong attempts-ku appuram hint varum!`;
@@ -917,9 +968,11 @@ async function startTrivia(msg: BotMessage): Promise<string> {
     resetArchive(msg.groupId, "trivia");
     pool = CURATED_TRIVIA;
   }
+  const remainingBeforePick = pool.length;
   const trivia = randPick(pool);
 
   archiveAnswer(msg.groupId, "trivia", trivia.answer);
+  void maybeNotifyLowPool("trivia", remainingBeforePick - 1);
   await createGame(msg.groupId, "trivia", {
     question: trivia.question,
     answer: trivia.answer.toLowerCase(),
@@ -976,8 +1029,10 @@ async function startWordle(msg: BotMessage, args = ""): Promise<string> {
   let archived = getArchived(msg.groupId, "wordle500");
   let pool = WORDLE500.filter(w => !archived.includes(w));
   if (pool.length === 0) { resetArchive(msg.groupId, "wordle500"); pool = WORDLE500; }
+  const remainingBeforePick = pool.length;
   const word = randPick(pool).toUpperCase();
   archiveAnswer(msg.groupId, "wordle500", word.toLowerCase());
+  void maybeNotifyLowPool("wordle", remainingBeforePick - 1);
   await createGame(msg.groupId, "wordle", {
     word, hint: "", guesses: [], solved: false, maxGuesses: 6, mode: "squad", greens: [],
   });
@@ -1671,6 +1726,7 @@ async function launchFastFingerGame(msg: BotMessage, player1Name: string): Promi
     resetArchive(msg.groupId, "fastfinger");
     pool = FASTFINGER_WORDS;
   }
+  const remainingBeforePick = pool.length;
   const word = randPick(pool);
 
   // 40% chance: players must type the REVERSE of the shown word
@@ -1678,6 +1734,7 @@ async function launchFastFingerGame(msg: BotMessage, player1Name: string): Promi
   const requiredAnswer = isReversed ? [...word].reverse().join("") : word;
 
   archiveAnswer(msg.groupId, "fastfinger", word.toLowerCase());
+  void maybeNotifyLowPool("fastfinger", remainingBeforePick - 1);
   await createGame(msg.groupId, "fastfinger", { targetWord: word, requiredAnswer, isReversed, ended: false });
 
   const header = `⚡ *FAST FINGER FIRST!* — ${player1Name} vs ${msg.senderName}\n\n`;
