@@ -1,10 +1,16 @@
-??? *Bug Fix Deployed*
+🎮 *GAMES UPDATE — pudhu games + fixes!*
 
-Fixed the !skip issue from Bug #90.
+Naanga games-a clean pannitom. Ippo enna irukku:
 
-What changed:
-? !skip / !abandon now properly clears the active game instead of falling into chat.
-? Cleared the stuck WYR game that blocked !top10.
-? Bot chat now uses cheaper Haiku by default, so Claude calls stay cost-friendly.
+🆕 *!wordle* — SQUAD WORDLE! 5-letter word, whole group shares 6 guesses. Ondra sethu crack pannunga 🧠 (🟩🟨⬜ blocks)
+🆕 *!anagram* — Letters scramble aagum, first to unscramble wins ⚡
+🆕 *!hangman* — Co-op letter guessing, group-ku 6 lives
 
-Try: !top10 or !skip next time a game gets stuck.
+🔧 *!ff (Fast Finger) fixed* — munnaadi answer-a copy-paste panna mudinjuchu, ippo neenga type panna vendum. Real speed challenge da!
+
+🧹 *Cleanup* — yaarum vilayaada games (wordchain, antakshari, storytime, etc.) remove pannitom. *!help* ippo concise.
+
+🐛 *!bug* — ippo last 20 messages context-a save pannum, so problem-a easy-a fix panna mudiyum.
+
+Core favourites still here: *!quiz !trivia !brandquiz !fastfinger*
+Try the new ones and let us know! 🎉

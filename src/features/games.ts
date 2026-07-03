@@ -10,7 +10,7 @@ interface CommandResult {
 }
 
 // ===== Fuzzy answer matching =====
-function levenshtein(a: string, b: string): number {
+export function levenshtein(a: string, b: string): number {
   const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
   const curr = new Array(b.length + 1).fill(0);
   for (let i = 1; i <= a.length; i++) {
@@ -26,7 +26,7 @@ function levenshtein(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-function fuzzyMatch(userAnswer: string, correctAnswer: string): boolean {
+export function fuzzyMatch(userAnswer: string, correctAnswer: string): boolean {
   const norm = (s: string) =>
     s.toLowerCase().replace(/[\s\-_'".,!?]/g, "");
   const a = norm(userAnswer);
@@ -62,7 +62,7 @@ function randPick<T>(arr: T[]): T {
 }
 
 // ===== Wordle helpers =====
-function computeWordleResult(guess: string, target: string): Array<"correct" | "present" | "absent"> {
+export function computeWordleResult(guess: string, target: string): Array<"correct" | "present" | "absent"> {
   const result: Array<"correct" | "present" | "absent"> = new Array(target.length).fill("absent");
   const usedTarget = new Array(target.length).fill(false);
   const usedGuess  = new Array(guess.length).fill(false);
@@ -82,7 +82,7 @@ function computeWordleResult(guess: string, target: string): Array<"correct" | "
   return result;
 }
 
-function buildWordleBoard(guesses: Array<{ player: string; word: string; result: string[] }>): string {
+export function buildWordleBoard(guesses: Array<{ player: string; word: string; result: string[] }>): string {
   return guesses.map(g => {
     const emojis = g.result.map(r => r === "correct" ? "🟩" : r === "present" ? "🟨" : "⬛").join("");
     return `*${g.player}* → ${g.word.toUpperCase()}\n${emojis}`;
@@ -153,8 +153,11 @@ const TTL_DAYS: Partial<Record<GameType, number>> = {
   riddle: 7, songlyric: 7, wyr: 7, detective: 7,
 };
 
-const ARCHIVE_DIR = join(process.cwd(), "data");
+// BANTERAGENT_DATA_DIR lets tests redirect the archive to a temp dir; when set we
+// also skip the best-effort Supabase mirror (tests run offline).
+const ARCHIVE_DIR = process.env.BANTERAGENT_DATA_DIR || join(process.cwd(), "data");
 const ARCHIVE_PATH = join(ARCHIVE_DIR, "used-answers.json");
+const ARCHIVE_REMOTE = !process.env.BANTERAGENT_DATA_DIR;
 
 if (!existsSync(ARCHIVE_DIR)) mkdirSync(ARCHIVE_DIR, { recursive: true });
 
@@ -166,13 +169,13 @@ function saveArchive(): void {
   try { writeFileSync(ARCHIVE_PATH, JSON.stringify(_archive, null, 2), "utf8"); } catch {}
 }
 
-function getArchived(groupId: string, type: GameType): string[] {
+export function getArchived(groupId: string, type: GameType): string[] {
   const perm = _archive[groupId]?.[type] ?? [];
   const ttl  = _ttlArchive[groupId]?.[type] ?? [];
   return perm.length && ttl.length ? [...perm, ...ttl] : perm.length ? perm : ttl;
 }
 
-function archiveAnswer(groupId: string, type: GameType, answer: string): void {
+export function archiveAnswer(groupId: string, type: GameType, answer: string): void {
   const norm = answer.toLowerCase();
   const days = TTL_DAYS[type];
   if (days) {
@@ -182,7 +185,7 @@ function archiveAnswer(groupId: string, type: GameType, answer: string): void {
     if (!list.includes(norm)) list.push(norm);
     _ttlArchive[groupId]![type] = list;
     const expiresAt = new Date(Date.now() + days * 86_400_000).toISOString();
-    supabase.from("ba_question_archive")
+    if (ARCHIVE_REMOTE) supabase.from("ba_question_archive")
       .upsert({ group_id: groupId, game_type: type, answer: norm, expires_at: expiresAt }, { onConflict: "group_id,game_type,answer" })
       .then(({ error }) => { if (error) console.error("[archive] write TTL:", error.message); });
   } else {
@@ -192,17 +195,17 @@ function archiveAnswer(groupId: string, type: GameType, answer: string): void {
     if (!list.includes(norm)) list.push(norm);
     _archive[groupId]![type] = list;
     saveArchive();
-    supabase.from("ba_question_archive")
+    if (ARCHIVE_REMOTE) supabase.from("ba_question_archive")
       .upsert({ group_id: groupId, game_type: type, answer: norm }, { onConflict: "group_id,game_type,answer" })
       .then(({ error }) => { if (error) console.error("[archive] write:", error.message); });
   }
 }
 
-function resetArchive(groupId: string, type: GameType): void {
+export function resetArchive(groupId: string, type: GameType): void {
   if (_archive[groupId]) delete _archive[groupId]![type];
   if (_ttlArchive[groupId]) delete _ttlArchive[groupId]![type];
   saveArchive();
-  supabase.from("ba_question_archive")
+  if (ARCHIVE_REMOTE) supabase.from("ba_question_archive")
     .delete().eq("group_id", groupId).eq("game_type", type)
     .then(({ error }) => { if (error) console.error("[archive] reset:", error.message); });
 }
@@ -1048,6 +1051,14 @@ async function handleWordleGuess(args: string, msg: BotMessage): Promise<string>
   return `${board}\n\n_${remaining} guess${remaining > 1 ? "es" : ""} remaining — Type *!w <word>*_`;
 }
 
+export function scramble(word: string): string {
+  let out = word;
+  for (let i = 0; i < 30 && out === word && word.length > 1; i++) {
+    out = word.split("").sort(() => Math.random() - 0.5).join("");
+  }
+  return out;
+}
+
 // ===== ANAGRAM RACE — first to unscramble wins (no shared-board problem) =====
 async function startAnagram(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "anagram");
@@ -1055,17 +1066,14 @@ async function startAnagram(msg: BotMessage): Promise<string> {
   if (pool.length === 0) { resetArchive(msg.groupId, "anagram"); pool = WORDLE500; }
   const word = randPick(pool).toUpperCase();
   archiveAnswer(msg.groupId, "anagram", word.toLowerCase());
-  let scrambled = word;
-  for (let i = 0; i < 30 && scrambled === word; i++) {
-    scrambled = word.split("").sort(() => Math.random() - 0.5).join("");
-  }
+  const scrambled = scramble(word);
   await createGame(msg.groupId, "anagram", { word, scrambled, ended: false });
   return `🔀 *ANAGRAM RACE*\n\nUnscramble these ${word.length} letters:\n\n*${scrambled.split("").join(" ")}*\n\nFirst to type *!a <word>* wins! ⚡`;
 }
 
 // ===== GROUP HANGMAN — co-op letter guessing, shared lives =====
 const HANGMAN_FACE = ["😎", "🙂", "😐", "😟", "😧", "😨", "💀"];
-function renderHangman(word: string, guessed: string[]): string {
+export function renderHangman(word: string, guessed: string[]): string {
   return word.split("").map(c => (guessed.includes(c) ? c : "⬜")).join(" ");
 }
 async function startHangman(msg: BotMessage): Promise<string> {
