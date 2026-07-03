@@ -3,6 +3,7 @@ import { generateContent, generateStructured } from "../claude.js";
 import { supabase } from "../supabase.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { WORDLE500 } from "./wordlewords.js";
 
 interface CommandResult {
   response: string;
@@ -144,7 +145,7 @@ const WORDLE_WORDS: { word: string; hint: string }[] = [
 // ===== MEMORY — word pools across categories =====
 // ===== Persistent answer archive — file cache + Supabase backend =====
 // File = fast in-session cache. Supabase = ground truth across restarts/redeployments.
-type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "wordle" | "mostlikely" | "riddle" | "songlyric" | "wyr" | "storytime" | "detective";
+type GameType = "quiz" | "brandquiz" | "trivia" | "fastfinger" | "twotruthsonelie" | "dialogue" | "song" | "wordle" | "mostlikely" | "riddle" | "songlyric" | "wyr" | "storytime" | "detective" | "anagram" | "hangman" | "wordle500";
 type ArchiveMap = Record<string, Partial<Record<GameType, string[]>>>;
 
 // TTL in days for Claude-generated games (undefined = permanent static-pool game)
@@ -952,25 +953,32 @@ async function startSongQuiz(msg: BotMessage): Promise<string> {
 }
 
 // ===== WORDLE — Group shared Tamil movie 6-letter puzzle =====
-async function startWordle(msg: BotMessage): Promise<string> {
-  let archived = getArchived(msg.groupId, "wordle");
-  let pool = WORDLE_WORDS.filter(w => !archived.includes(w.word.toLowerCase()));
-  if (pool.length === 0) {
-    resetArchive(msg.groupId, "wordle");
-    pool = WORDLE_WORDS;
+async function startWordle(msg: BotMessage, args = ""): Promise<string> {
+  // `!wordle tamil` / `!wordle kollywood` → the 6-letter movie pool (with hints).
+  // Default → the 500-word 5-letter English Squad Wordle (no hint, purer challenge).
+  const kollywood = /\b(tamil|kollywood|movie)\b/i.test(args);
+
+  if (kollywood) {
+    let archived = getArchived(msg.groupId, "wordle");
+    let pool = WORDLE_WORDS.filter(w => !archived.includes(w.word.toLowerCase()));
+    if (pool.length === 0) { resetArchive(msg.groupId, "wordle"); pool = WORDLE_WORDS; }
+    const entry = randPick(pool);
+    archiveAnswer(msg.groupId, "wordle", entry.word.toLowerCase());
+    await createGame(msg.groupId, "wordle", {
+      word: entry.word, hint: entry.hint, guesses: [], solved: false, maxGuesses: 6, mode: "kollywood",
+    });
+    return `🟩 *WORDLE — KOLLYWOOD EDITION*\n\n*${entry.word.length}*-letter Tamil movie title! Group shared board.\nType *!w <word>* — 6 guesses for the whole squad.\n\n🟩 right spot · 🟨 wrong spot · ⬛ not in word\n💡 Hint: ${entry.hint}`;
   }
-  const entry = randPick(pool);
-  archiveAnswer(msg.groupId, "wordle", entry.word.toLowerCase());
 
+  let archived = getArchived(msg.groupId, "wordle500");
+  let pool = WORDLE500.filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "wordle500"); pool = WORDLE500; }
+  const word = randPick(pool).toUpperCase();
+  archiveAnswer(msg.groupId, "wordle500", word.toLowerCase());
   await createGame(msg.groupId, "wordle", {
-    word: entry.word,
-    hint: entry.hint,
-    guesses: [],
-    solved: false,
-    maxGuesses: 6,
+    word, hint: "", guesses: [], solved: false, maxGuesses: 6, mode: "squad", greens: [],
   });
-
-  return `🟩 *WORDLE — KOLLYWOOD EDITION*\n\n*${entry.word.length}*-letter Tamil movie title!\nEveryone can guess — group shared board!\n\nType *!w <word>* to submit a guess.\n6 total guesses for the group.\n\n🟩 right letter, right spot\n🟨 right letter, wrong spot\n⬛ letter not in word\n\n💡 Hint: ${entry.hint}`;
+  return `🟩 *SQUAD WORDLE*\n\nGuess the *5-letter* word — the whole squad shares *6 guesses*.\nAnyone type *!w <word>* — build on each other's clues!\n\n🟩 right letter, right spot\n🟨 right letter, wrong spot\n⬛ not in the word\n\n_Crack it together da 🧠 (!wordle tamil for movie edition)_`;
 }
 
 async function handleWordleGuess(args: string, msg: BotMessage): Promise<string> {
@@ -991,30 +999,83 @@ async function handleWordleGuess(args: string, msg: BotMessage): Promise<string>
   }
 
   const result = computeWordleResult(guess, target);
-  const guesses = (state.guesses as Array<{ player: string; word: string; result: string[] }>);
-  guesses.push({ player: msg.senderName, word: guess, result });
+  const guesses = (state.guesses as Array<{ player: string; phone?: string; word: string; result: string[] }>);
+  guesses.push({ player: msg.senderName, phone: msg.from, word: guess, result });
+
+  // Teamwork: credit the FIRST person to reveal each green position (name+phone).
+  const greenBy: Record<string, { name: string; phone: string }> =
+    (state.greenBy as Record<string, { name: string; phone: string }>) ?? {};
+  result.forEach((r, i) => {
+    if (r === "correct" && greenBy[i] === undefined) {
+      greenBy[i] = { name: msg.senderName, phone: msg.from };
+    }
+  });
 
   const isSolved = result.every(r => r === "correct");
   const isGameOver = isSolved || guesses.length >= (state.maxGuesses as number);
 
   await supabase
     .from("ba_game_state")
-    .update({ state: { ...state, guesses, solved: isSolved }, is_active: !isGameOver })
+    .update({ state: { ...state, guesses, greenBy, solved: isSolved }, is_active: !isGameOver })
     .eq("id", game.id);
 
   const board = buildWordleBoard(guesses);
 
   if (isSolved) {
-    await awardPoints(msg.groupId, msg.from, msg.senderName, "wordle", 20);
-    return `🟩 *WORDLE SOLVED!*\n\n*${msg.senderName}* cracked it in ${guesses.length} guess${guesses.length > 1 ? "es" : ""}! 🎉\n\n${board}\n\nWord: *${target}*\n+20 points! Type *!wordle* for a new game.`;
+    // Solver gets speed-scaled points; clue-givers who first revealed a green get +2.
+    const used = guesses.length;
+    const solverPts = Math.max(4, (state.maxGuesses as number) - used + 1) * 4;
+    await awardPoints(msg.groupId, msg.from, msg.senderName, "wordle", solverPts);
+    const helpers = Object.values(greenBy).filter(h => h.phone !== msg.from);
+    const seen = new Set<string>();
+    const helperNames: string[] = [];
+    for (const h of helpers) {
+      if (seen.has(h.phone)) continue;
+      seen.add(h.phone);
+      helperNames.push(h.name);
+      await awardPoints(msg.groupId, h.phone, h.name, "wordle", 2).catch(() => {});
+    }
+    const helpLine = helperNames.length ? `\n🤝 Clue assists: ${helperNames.join(", ")} (+2 each)` : "";
+    return `🟩 *SOLVED!* *${msg.senderName}* cracked it in ${used} guess${used > 1 ? "es" : ""}! 🎉\n\n${board}\n\nWord: *${target}*\n+${solverPts} points!${helpLine}\n\nType *!wordle* for a new one.`;
   }
 
   if (isGameOver) {
-    return `💀 *GAME OVER!* All ${state.maxGuesses} guesses used.\n\n${board}\n\nAnswer was: *${target}*\n💡 ${state.hint}\n\nType *!wordle* for a new game.`;
+    const hintLine = state.hint ? `\n💡 ${state.hint}` : "";
+    return `💀 *GAME OVER!* All ${state.maxGuesses} guesses used.\n\n${board}\n\nAnswer was: *${target}*${hintLine}\n\nType *!wordle* for a new game.`;
   }
 
   const remaining = (state.maxGuesses as number) - guesses.length;
   return `${board}\n\n_${remaining} guess${remaining > 1 ? "es" : ""} remaining — Type *!w <word>*_`;
+}
+
+// ===== ANAGRAM RACE — first to unscramble wins (no shared-board problem) =====
+async function startAnagram(msg: BotMessage): Promise<string> {
+  let archived = getArchived(msg.groupId, "anagram");
+  let pool = WORDLE500.filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "anagram"); pool = WORDLE500; }
+  const word = randPick(pool).toUpperCase();
+  archiveAnswer(msg.groupId, "anagram", word.toLowerCase());
+  let scrambled = word;
+  for (let i = 0; i < 30 && scrambled === word; i++) {
+    scrambled = word.split("").sort(() => Math.random() - 0.5).join("");
+  }
+  await createGame(msg.groupId, "anagram", { word, scrambled, ended: false });
+  return `🔀 *ANAGRAM RACE*\n\nUnscramble these ${word.length} letters:\n\n*${scrambled.split("").join(" ")}*\n\nFirst to type *!a <word>* wins! ⚡`;
+}
+
+// ===== GROUP HANGMAN — co-op letter guessing, shared lives =====
+const HANGMAN_FACE = ["😎", "🙂", "😐", "😟", "😧", "😨", "💀"];
+function renderHangman(word: string, guessed: string[]): string {
+  return word.split("").map(c => (guessed.includes(c) ? c : "⬜")).join(" ");
+}
+async function startHangman(msg: BotMessage): Promise<string> {
+  let archived = getArchived(msg.groupId, "hangman");
+  let pool = WORDLE500.filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "hangman"); pool = WORDLE500; }
+  const word = randPick(pool).toUpperCase();
+  archiveAnswer(msg.groupId, "hangman", word.toLowerCase());
+  await createGame(msg.groupId, "hangman", { word, guessed: [], wrong: [], lives: 6, ended: false });
+  return `🪢 *GROUP HANGMAN*\n\n${word.split("").map(() => "⬜").join(" ")}\n\n${word.length} letters · squad shares *6 lives*.\nType *!a <letter>* (or the full word) — guess together! ${HANGMAN_FACE[0]}`;
 }
 
 // ===== HANDLE ANSWER =====
@@ -1216,6 +1277,64 @@ async function handleAnswer(args: string, msg: BotMessage): Promise<string> {
       }
       await supabase.from("ba_game_state").update({ state }).eq("id", game.id);
       return `❌ Wrong arrest da! Evidence illa. (${state.attempts}/5)`;
+    }
+
+    case "anagram": {
+      if (state.ended) return "Anagram already solved da! Type !anagram for next.";
+      if (rawAnswer.toUpperCase() === (state.word as string).toUpperCase()) {
+        await supabase.from("ba_game_state").update({ is_active: false, state: { ...state, ended: true } }).eq("id", game.id);
+        await awardPoints(msg.groupId, msg.from, msg.senderName, "anagram", 15);
+        return `⚡ *${msg.senderName} GOT IT!* 🎉\n\nWord: *${state.word}*\n+15 points! Type *!anagram* for the next one.`;
+      }
+      return `❌ Not it da! Unscramble: *${(state.scrambled as string).split("").join(" ")}*`;
+    }
+
+    case "hangman": {
+      if (state.ended) return "Hangman over da! Type !hangman for a new one.";
+      const word = (state.word as string).toUpperCase();
+      const guessed = state.guessed as string[];
+      const wrong = state.wrong as string[];
+      const g = rawAnswer.toUpperCase().replace(/[^A-Z]/g, "");
+      if (!g) return `One letter da (*!a e*) or the full word. ${renderHangman(word, guessed)}`;
+
+      // Full-word guess
+      if (g.length === word.length) {
+        if (g === word) {
+          for (const c of word) if (!guessed.includes(c)) guessed.push(c);
+          await supabase.from("ba_game_state").update({ is_active: false, state: { ...state, guessed, ended: true } }).eq("id", game.id);
+          await awardPoints(msg.groupId, msg.from, msg.senderName, "hangman", 15);
+          return `🎉 *${msg.senderName} SOLVED IT!*\n\n${word.split("").join(" ")}\n+15 points! Type *!hangman* for the next.`;
+        }
+        // wrong full word costs a life (fall through to life-loss below)
+      } else if (g.length === 1) {
+        const letter = g;
+        if (guessed.includes(letter) || wrong.includes(letter)) {
+          return `"${letter}" already tried da. ${renderHangman(word, guessed)} · ${state.lives} ❤️`;
+        }
+        if (word.includes(letter)) {
+          guessed.push(letter);
+          const done = word.split("").every(c => guessed.includes(c));
+          if (done) {
+            await supabase.from("ba_game_state").update({ is_active: false, state: { ...state, guessed, ended: true } }).eq("id", game.id);
+            await awardPoints(msg.groupId, msg.from, msg.senderName, "hangman", 12);
+            return `🎉 *SOLVED!* ${msg.senderName} landed the last letter!\n\n${word.split("").join(" ")}\n+12 points! Type *!hangman* for the next.`;
+          }
+          await supabase.from("ba_game_state").update({ state: { ...state, guessed } }).eq("id", game.id);
+          return `✅ *${letter}* is in!\n${renderHangman(word, guessed)}\n${HANGMAN_FACE[6 - (state.lives as number)]} ${state.lives} lives`;
+        }
+        wrong.push(letter);
+      } else {
+        return `One letter (*!a e*) or the full ${word.length}-letter word da.`;
+      }
+
+      // Life lost (wrong letter or wrong full word)
+      const lives = (state.lives as number) - 1;
+      if (lives <= 0) {
+        await supabase.from("ba_game_state").update({ is_active: false, state: { ...state, wrong, lives, ended: true } }).eq("id", game.id);
+        return `💀 *HANGMAN DOWN!* Out of lives.\n\nWord was: *${word}*\n${HANGMAN_FACE[6]}\nType *!hangman* for a new one.`;
+      }
+      await supabase.from("ba_game_state").update({ state: { ...state, wrong, lives } }).eq("id", game.id);
+      return `❌ ${g.length === 1 ? `No "${g}"` : "Wrong word"} da!\n${renderHangman(word, guessed)}\n${HANGMAN_FACE[6 - lives]} ${lives} lives · wrong: ${wrong.join(" ") || "—"}`;
     }
 
     case "fastfinger": {
@@ -2137,7 +2256,7 @@ async function startTwoTruthsOneLie(msg: BotMessage): Promise<string> {
 }
 
 // ===== MAIN HANDLER =====
-const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","detective","storytime","story","dialogue","song","wordle","songlyric","wyr","wordchain","antakshari","trivia"]);
+const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","detective","storytime","story","dialogue","song","wordle","songlyric","wyr","wordchain","antakshari","trivia","anagram","scramble","hangman"]);
 
 export async function handleGameCommand(
   command: string,
@@ -2194,7 +2313,14 @@ export async function handleGameCommand(
       response = await startSongQuiz(msg);
       break;
     case "wordle":
-      response = await startWordle(msg);
+      response = await startWordle(msg, args);
+      break;
+    case "anagram":
+    case "scramble":
+      response = await startAnagram(msg);
+      break;
+    case "hangman":
+      response = await startHangman(msg);
       break;
     case "wordle_guess":
       response = await handleWordleGuess(args, msg);

@@ -252,6 +252,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "story":
     case "twotruthsonelie":
     case "2t1l":
+    case "anagram":
+    case "scramble":
+    case "hangman":
     case "score":
       return handleGameCommand(command, args, msg);
 
