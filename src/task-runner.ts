@@ -232,7 +232,9 @@ async function taskAutoGameDrop(groupId: string) {
   if (settings?.muted) return;
   if (settings && settings.auto_game_drop === false) return;
 
-  const games = ["quiz", "trivia", "wyr"] as const;
+  // Proven organic favourites + one new game for exposure (wyr removed — its
+  // popularity was inflated by this auto-drop, not real user interest).
+  const games = ["quiz", "trivia", "anagram"] as const;
   const game  = games[Math.floor(Math.random() * games.length)]!;
 
   const fakeMsg: BotMessage = {

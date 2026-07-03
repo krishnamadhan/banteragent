@@ -2199,3 +2199,30 @@ Last spot → Slot 2 → *Anjaan* (auto-placed)
 
 ---
 
+## Bug #91 — 2026-07-03 11:08:52 IST
+**Reporter:** Krishna Madhan (`919487506127@c.us`)
+**Group:** `120363399878677641@g.us`
+**Status:** `FIXED`
+**Description:** everything is wrong
+
+**Recent chat context:**
+```
+  [Krishna Madhan]: Ok bye
+  [Madhu]: ada poda
+  [Krishna Madhan]: !bug
+  [Bot]: Format: *!bug <what went wrong>*
+Example: !bug Quiz emoji doesn't match the movie at all
+  [Krishna Madhan]: !bug everything is wrong
+```
+
+**Fix notes:** Vague report — followed up with owner. Root improvements shipped 2026-07-03:
+(1) FAST FINGER fixed — the non-reversed round pre-filled the answer command
+(`!a MERSAL`), making it a pointless copy-paste; now you must spell the word yourself.
+(2) Removed 10 unused/low-engagement games (riddle, song, dialogue, songlyric, wyr,
+2t1l, storytime, wordchain, antakshari, mostlikely) based on play-count analysis —
+help is now concise. (3) Added Squad Wordle (721 words, co-op), Anagram Race, Group
+Hangman. (4) !bug now captures the last 20 messages (was 5) for real diagnosis.
+Status: FIXED.
+
+---
+

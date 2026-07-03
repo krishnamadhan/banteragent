@@ -29,7 +29,7 @@ const COMMAND_COOLDOWN_MS = 8_000; // 8 seconds between commands per user
 
 // Recent messages buffer for auto-response context
 const recentMessages: string[] = [];
-const MAX_RECENT = 15;
+const MAX_RECENT = 25;  // holds enough context for !bug reports (last 20)
 export function getRecentMessages(): string[] { return [...recentMessages]; }
 export function addRecentMessage(text: string): void {
   recentMessages.push(text);

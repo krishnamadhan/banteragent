@@ -38,8 +38,8 @@ export function handleBugReport(args: string, msg: BotMessage, recentMessages: s
   const timestamp = istNow.toISOString().replace("T", " ").slice(0, 19) + " IST";
   const bugNum = getNextBugNumber();
 
-  // Last 5 messages for context (strip current message)
-  const context = recentMessages.slice(-5).map((m) => `  ${m}`).join("\n");
+  // Last 20 messages for context — enough to actually see what went wrong.
+  const context = recentMessages.slice(-20).map((m) => `  ${m}`).join("\n");
 
   const entry = `## Bug #${bugNum} — ${timestamp}
 **Reporter:** ${msg.senderName} (\`${msg.from}\`)

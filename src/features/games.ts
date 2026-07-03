@@ -1674,9 +1674,9 @@ async function launchFastFingerGame(msg: BotMessage, player1Name: string): Promi
 
   const header = `⚡ *FAST FINGER FIRST!* — ${player1Name} vs ${msg.senderName}\n\n`;
   if (isReversed) {
-    return `${header}🔄 Type the *REVERSE* of this word:\n\n*${word}*\n\nType *!a <reversed word>* — GO! 🏃🧠`;
+    return `${header}🔄 Type the *REVERSE* of this word — fastest correct wins *15 points*:\n\n*${word}*\n\n_Type *!a <reversed word>* — GO! 🏃🧠_`;
   }
-  return `${header}🎯 First to type this EXACTLY wins *15 points*:\n\n*${word}*\n\nType *!a ${word}* — GO! 🏃`;
+  return `${header}🎯 Type this word EXACTLY — fastest correct wins *15 points*:\n\n*${word}*\n\n_Type *!a <word>* (spell it yourself, no copy-paste!) — GO! 🏃_`;
 }
 
 async function handleFastFinger(msg: BotMessage): Promise<string> {
@@ -2256,7 +2256,7 @@ async function startTwoTruthsOneLie(msg: BotMessage): Promise<string> {
 }
 
 // ===== MAIN HANDLER =====
-const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","riddle","fastfinger","ff","mostlikely","ml","twotruthsonelie","2t1l","detective","storytime","story","dialogue","song","wordle","songlyric","wyr","wordchain","antakshari","trivia","anagram","scramble","hangman"]);
+const START_GAME_COMMANDS = new Set(["quiz","brandquiz","logoquiz","fastfinger","ff","detective","wordle","trivia","anagram","scramble","hangman"]);
 
 export async function handleGameCommand(
   command: string,
@@ -2284,33 +2284,12 @@ export async function handleGameCommand(
     case "logoquiz":
       response = await startBrandQuiz(msg);
       break;
-    case "riddle":
-      response = await startRiddle(msg);
-      break;
     case "fastfinger":
     case "ff":
       response = await handleFastFinger(msg);
       break;
-    case "mostlikely":
-    case "ml":
-      response = await startMostLikely(msg);
-      break;
-    case "twotruthsonelie":
-    case "2t1l":
-      response = await startTwoTruthsOneLie(msg);
-      break;
     case "detective":
       response = await startDetective(msg);
-      break;
-    case "storytime":
-    case "story":
-      response = await startStoryTime(msg);
-      break;
-    case "dialogue":
-      response = await startDialogue(msg);
-      break;
-    case "song":
-      response = await startSongQuiz(msg);
       break;
     case "wordle":
       response = await startWordle(msg, args);
@@ -2324,18 +2303,6 @@ export async function handleGameCommand(
       break;
     case "wordle_guess":
       response = await handleWordleGuess(args, msg);
-      break;
-    case "songlyric":
-      response = await startSongLyric(msg);
-      break;
-    case "wyr":
-      response = await startWYR(msg);
-      break;
-    case "wordchain":
-      response = await startWordChain(msg);
-      break;
-    case "antakshari":
-      response = await startAntakshari(msg);
       break;
     case "trivia":
       response = await startTrivia(msg);

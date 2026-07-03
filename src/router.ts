@@ -124,29 +124,18 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
 💬 *Chat:* dei claude <message>
 🎮 *Games:*
-  !battle [keyword] — VS bracket battle (group vote)
-  !top10 [keyword] — Blind ranking game (group vote)
-  !next [slot] — Reveal round / lock placement
   !quiz — Tamil movie emoji quiz
-  !brandquiz — Guess the Indian brand
-  !dialogue — Guess movie from dialogue
-  !song — Guess Tamil song from English lyrics
-  !wordle — Group Wordle (Tamil movie titles!)
-  !w <word> — Submit a Wordle guess
-  !detective — 🕵️ NEW! Solve the petty crime
-  !songlyric — Complete the song lyric
-  !riddle — Tamil riddle
-  !fastfinger (!ff) — First to type wins!
-  !mostlikely (!ml) — Most likely to... vote
-  !storytime (!story) — Collaborative story
-  !wyr — Would You Rather
-  !wordchain — Word chain game
-  !antakshari — Antakshari
   !trivia — Tamil Nadu trivia
-  !2t1l — 2 Truths, 1 Lie
-  !a — Answer any active game
-  !score — Weekly leaderboard
-  !score alltime — All-time leaderboard
+  !brandquiz — Guess the Indian brand
+  !fastfinger (!ff) — First to type the word wins
+  !wordle — 🆕 Squad Wordle (5-letter, crack it together)
+  !w <word> — Wordle guess
+  !anagram — 🆕 Unscramble, first correct wins
+  !hangman — 🆕 Co-op letter guessing
+  !detective — 🕵️ Solve the petty crime
+  !battle / !top10 — VS battle / blind ranking (group vote)
+  !a — Answer the active game
+  !score [alltime] — Leaderboard
 
 🏏 *Cricket:*
   !cricket — Live scores
@@ -234,24 +223,11 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "quiz":
     case "brandquiz":
     case "logoquiz":
-    case "dialogue":
-    case "song":
     case "wordle":
-    case "songlyric":
-    case "wyr":
-    case "wordchain":
-    case "antakshari":
     case "trivia":
-    case "riddle":
     case "fastfinger":
     case "ff":
-    case "mostlikely":
-    case "ml":
     case "detective":
-    case "storytime":
-    case "story":
-    case "twotruthsonelie":
-    case "2t1l":
     case "anagram":
     case "scramble":
     case "hangman":
