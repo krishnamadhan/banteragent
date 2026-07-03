@@ -169,3 +169,13 @@ next highest-value item. Amendments to the original prompt (documented reasoning
   (it was spawning hourly, 3/6 daily cap, each concluding "nothing to do" — wasteful).
   Fully reversible: flip STATUS: active to resume. Usage-limit recovery unaffected
   (paused-limit path still honored). No code touched this run.
+
+## 2026-07-03 — checks/routines/reports/hands-free round
+- LED scene presets (movie/chill/night/focus/reading/romance/party) — robot API
+  /led/scene LIVE; banteragent !led <scene> staged. Party = bg hue cycle.
+- LED health telemetry (writes ok/fail, consec_fail, healthy) + /led/health.
+- pi-selfcheck.py: validates PM2/RAM/disk/temp/net/backups/watchdog/cosmo/LED →
+  owner DM. Cron: quiet every 2h, full digest 08:00. `!pi selfcheck` on demand (staged).
+- !pi led (cosmo+LED health), !led status commands (staged).
+- Review fix: manual /led cmd + TV sync now stop any scene animation (was dual-writer).
+- All robot changes deployed + verified; banteragent staged for next restart.
