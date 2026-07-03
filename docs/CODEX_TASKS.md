@@ -118,11 +118,33 @@ Add an automated validator used by BOTH the refresh generator (Phase 4) and a ne
    failing items (move them to `data/pool-quarantine.json`, excluded from play).
 4. Tests: rule checks fully covered; the Claude call mocked.
 
+## PHASE 6 — Final completion report (REQUIRED — do this last)
+When ALL phases are done, write a single **`docs/CODEX_REPORT.md`** so a reviewer
+(another AI agent) can audit and take over without re-reading every diff. It MUST
+contain, honestly and concisely:
+1. **Summary** — one paragraph: what you built, and the final state (done / partial).
+2. **Per-phase status** — a table: Phase | Done? (✅/⚠️/❌) | what was delivered | any
+   gaps or shortcuts taken. Be honest about anything skipped, faked, or left TODO.
+3. **Test coverage** — how many tests, per game/module; run `npm test` and paste the
+   final pass/fail summary line; list any tests that are skipped/xfail and why.
+4. **Bugs found & fixed** — each real bug you uncovered while testing, root cause, the
+   fix, and the regression test that now guards it (cross-ref bugs.md numbers).
+5. **New commands / behaviour** — `!refreshgames add/reset`, `!gamecheck`, the low-pool
+   owner alert: exact syntax, what they do, and how they were tested (mocked calls etc).
+6. **Files changed** — grouped list with a one-line why for each.
+7. **Assumptions & risks** — anything you assumed, any place you couldn't fully verify
+   (e.g. live Supabase, live Claude), and what a human/reviewer should check manually.
+8. **Recommended next steps** — what you'd do with more time; anything left for review.
+Keep it factual — do NOT claim green tests you didn't run or coverage you didn't write.
+The reviewer will diff your report against the actual code, so precision matters.
+
 ## Deliverables & agreement
 - `npm test` green; `npx tsc --noEmit` clean. Add a short `docs/GAMES_TESTING.md`
   describing how to run tests and how the archive/refresh/quality systems work.
+- Finish with `docs/CODEX_REPORT.md` (Phase 6) — this is how the work gets reviewed.
 - Do NOT change WhatsApp wiring, prompts of other features, or restart anything.
 - If you find an actual game bug while testing, fix it and add the regression test that
   proves it — note it in `bugs.md` with a fix note.
 - Trace carefully: prefer many small, named test cases over a few broad ones, so a
   future change tells us exactly what broke.
+- Commit everything and leave the repo in a clean, recoverable state on completion.
