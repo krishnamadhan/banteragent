@@ -102,6 +102,19 @@ module.exports = {
       time: true,
     },
 
+    // ── AgentBoard — two-agent kanban UI (:9091) + daily WhatsApp standup ─────
+    {
+      name: "agentboard",
+      script: "/home/pi/agentboard/server.py",
+      cwd: "/home/pi/agentboard",
+      interpreter: "python3",
+      autorestart: true,
+      restart_delay: 5000,
+      out_file: "/home/pi/logs/agentboard-out.log",
+      error_file: "/home/pi/logs/agentboard-err.log",
+      time: true,
+    },
+
     // Removed 2026-07-02 (were defined here but absent from the live PM2 dump):
     //   claude-startup — one-shot boot notifier, superseded by pi-monitor's reports
     //   bug-watcher    — scheduled-bug-fixer flow is disabled in pi-scheduler too
