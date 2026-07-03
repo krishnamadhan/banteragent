@@ -2,7 +2,16 @@ import type { BotMessage, CommandResult } from "./types.js";
 import { writeFileSync } from "fs";
 import { getChatResponse, setGroupMode, generateContent } from "./claude.js";
 import { getGroupConfig } from "./group-config.js";
-import { handleGameCommand, clearGroupArchive, getArchiveStats, skipActiveGame } from "./features/games.js";
+import {
+  handleGameCommand,
+  clearGroupArchive,
+  getArchiveStats,
+  skipActiveGame,
+  refreshGamesAdd,
+  resetArchive,
+  runGameCheck,
+  type RefreshableGame,
+} from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
 import { handlePollCommand } from "./features/polls.js";
 import { handleStatsCommand } from "./features/analytics.js";
@@ -456,8 +465,21 @@ Change: ${modeList}` };
       const senderJid = msg.from;
       const isOwner = samePhone(senderJid, ownerPhone);
       if (!isOwner) return { response: "Only group admin can use !refreshgames da 😤" };
-      const confirmArg = args[0]?.toLowerCase();
-      if (confirmArg === "confirm") {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0]?.toLowerCase();
+      const game = parts[1]?.toLowerCase() as RefreshableGame | undefined;
+      const games = new Set(["quiz", "brandquiz", "trivia", "fastfinger", "wordle", "anagram", "hangman"]);
+      if (action === "add") {
+        if (!game || !games.has(game)) return { response: "Usage: *!refreshgames add <game> [N]*" };
+        const count = parts[2] ? Number.parseInt(parts[2], 10) : 20;
+        return { response: await refreshGamesAdd(msg.groupId, game, Number.isFinite(count) ? count : 20) };
+      }
+      if (action === "reset") {
+        if (!game || !games.has(game)) return { response: "Usage: *!refreshgames reset <game>*" };
+        resetArchive(msg.groupId, game === "wordle" ? "wordle500" : game);
+        return { response: `OK ${game} archive reset. Existing pool kept; extras still available.` };
+      }
+      if (action === "confirm") {
         const pending = _refreshConfirmPending.get(msg.groupId);
         if (!pending || Date.now() - pending > 60_000) {
           return { response: "Confirm window expired. Send *!refreshgames* again to start." };
@@ -476,9 +498,25 @@ Change: ${modeList}` };
 
     case "gamestats": {
       const stats = getArchiveStats(msg.groupId);
-      const lines = stats.map(s => `  ${s.type}: ${s.used}/${s.total}`);
+      const poolColor = (remaining: number) => remaining <= 10 ? "\u{1F534}" : remaining <= 20 ? "\u{1F7E1}" : "\u{1F7E2}";
+      const lines = stats.map(s => s.remaining !== undefined
+        ? `  ${poolColor(s.remaining)} ${s.type}: ${s.used}/${s.total} used, ${s.remaining} left`
+        : `  ${s.type}: ${s.used}/${s.total} used`);
       const totalUsed = stats.reduce((n, s) => n + s.used, 0);
       return { response: `📊 *Game Stats*\n――――――――――――――\n${lines.join("\n")}\n――――――――――――――\nTotal played: ${totalUsed}` };
+    }
+
+    case "gamecheck": {
+      const ownerPhone = process.env.BOT_OWNER_PHONE;
+      const isOwner = samePhone(msg.from, ownerPhone);
+      if (!isOwner) return { response: "Only owner can use !gamecheck da" };
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const game = parts[0]?.toLowerCase() as RefreshableGame | undefined;
+      const games = new Set(["quiz", "brandquiz", "trivia", "fastfinger", "wordle", "anagram", "hangman"]);
+      if (!game || !games.has(game)) return { response: "Usage: *!gamecheck <game> [quarantine]*" };
+      const result = await runGameCheck(game, parts.includes("quarantine"));
+      const sample = result.failures.slice(0, 8).map((f) => `- ${f.key}: ${f.reason}`).join("\n");
+      return { response: `🔍 *Game Check: ${game}*\nChecked: ${result.checked}\nFAIL: ${result.failures.length}${result.quarantined ? `\nQuarantined: ${result.quarantined}` : ""}${sample ? `\n\n${sample}` : ""}` };
     }
 
     case "bug":

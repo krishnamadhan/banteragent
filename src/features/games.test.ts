@@ -2,7 +2,7 @@
 // Uses node:test (built-in). Pure functions + file-backed archive, no live services.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,4 +96,93 @@ test("archive: a fresh pick never repeats an archived item until pool exhausts",
     picked.push(w);
   }
   assert.equal(new Set(picked).size, pool.length); // no repeats across the full pool
+});
+
+
+test("pool status: finite curated pools report total used remaining", () => {
+  const gid = "gtest-status";
+  g.archiveAnswer(gid, "quiz", "kaththi");
+  g.archiveAnswer(gid, "wordle500", "about");
+  const stats = g.getPoolStatus(gid);
+  assert.deepEqual(stats.map(s => s.type), ["quiz", "brandquiz", "trivia", "fastfinger", "wordle"]);
+  const quiz = stats.find(s => s.type === "quiz")!;
+  const wordle = stats.find(s => s.type === "wordle")!;
+  assert.equal(quiz.used, 1);
+  assert.equal(quiz.remaining, quiz.total - 1);
+  assert.equal(wordle.used, 1);
+  assert.equal(wordle.remaining, wordle.total - 1);
+});
+
+test("low pool notify: posts once per game per IST day", async () => {
+  const calls: Array<{ url: unknown; init: any }> = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => {
+    calls.push({ url, init });
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  try {
+    const now = new Date("2026-07-03T10:00:00.000Z");
+    assert.equal(await g.maybeNotifyLowPool("quiz", g.LOW_WATERMARK, now), true);
+    assert.equal(await g.maybeNotifyLowPool("quiz", g.LOW_WATERMARK - 1, now), false);
+    assert.equal(await g.maybeNotifyLowPool("trivia", g.LOW_WATERMARK, now), true);
+    assert.equal(await g.maybeNotifyLowPool("wordle", g.LOW_WATERMARK + 1, now), false);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.url, "http://127.0.0.1:3099/cosmo-notify");
+    assert.deepEqual(JSON.parse(calls[0]!.init.body), { message: `⚠️ quiz pool low: ${g.LOW_WATERMARK} left. !refreshgames add quiz` });
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+
+test("quality rules: cover words, emoji leak, and prompt basics", () => {
+  assert.deepEqual(g.validateGameItemRules("wordle", "about"), []);
+  assert.equal(g.validateGameItemRules("wordle", "abcd")[0]!.reason, "word must be exactly 5 A-Z letters");
+  assert.equal(g.validateGameItemRules("anagram", "abc12")[0]!.reason, "word must be exactly 5 A-Z letters");
+  assert.equal(g.validateGameItemRules("fastfinger", "hello").length, 0);
+  assert.equal(g.validateGameItemRules("fastfinger", "bad1")[0]!.reason, "fastfinger word must contain only A-Z letters");
+  assert.equal(g.validateGameItemRules("quiz", { emojis: "kaththi", answer: "kaththi", hint: "hint" })[0]!.reason, "emoji clue leaks answer");
+  assert.equal(g.validateGameItemRules("trivia", { question: "", answer: "42", hint: "", fact: "" })[0]!.reason, "trivia prompt is missing");
+});
+
+test("refreshgames add: dedupes, validates, and appends survivors", async () => {
+  g.setGameTestHooks({ generateStructured: async () => JSON.stringify(["newword", "ADYAR", "bad1"]) });
+  const response = await g.refreshGamesAdd("g-refresh", "fastfinger", 3);
+  assert.match(response, /added 1, rejected 2/);
+  const extra = JSON.parse(readFileSync(join(TMP, "pool-extra.json"), "utf8"));
+  assert.deepEqual(extra.fastfinger, ["newword"]);
+});
+
+test("refreshgames add: semantic checker drops Claude failures", async () => {
+  const replies = [
+    JSON.stringify([
+      { emojis: "🍕🇮🇹", answer: "pizza", hint: "food clue" },
+      { emojis: "🎬⚔️", answer: "wrong", hint: "Vijay movie clue" },
+    ]),
+    "0 PASS\n1 FAIL: wrong Vijay movie",
+  ];
+  g.setGameTestHooks({ generateStructured: async () => replies.shift()! });
+  const response = await g.refreshGamesAdd("g-refresh-semantic", "quiz", 2);
+  assert.match(response, /added 1, rejected 1/);
+  const extra = JSON.parse(readFileSync(join(TMP, "pool-extra.json"), "utf8"));
+  assert.equal(extra.quiz.at(-1).answer, "pizza");
+});
+
+test("gamecheck: unparseable semantic response fails closed", async () => {
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ quiz: [{ emojis: "🎬🍿", answer: "movie", hint: "cinema clue" }] }));
+  g.setGameTestHooks({ generateStructured: async () => "not parseable" });
+  const result = await g.runGameCheck("quiz", false);
+  assert.ok(result.failures.some(f => f.key === "movie" && f.reason.includes("unparseable")));
+});
+
+test("gamecheck quarantine: writes failing keys and excludes them from pools", async () => {
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ fastfinger: ["bad1"] }));
+  const before = g.getPoolStatus("g-quarantine").find(s => s.type === "fastfinger")!;
+  const result = await g.runGameCheck("fastfinger", true);
+  const after = g.getPoolStatus("g-quarantine").find(s => s.type === "fastfinger")!;
+  assert.equal(result.quarantined, 1);
+  assert.ok(result.failures.some(f => f.key === "bad1"));
+  assert.equal(after.total, before.total - 1);
+  const quarantine = JSON.parse(readFileSync(join(TMP, "pool-quarantine.json"), "utf8"));
+  assert.ok(quarantine.fastfinger.includes("bad1"));
 });
