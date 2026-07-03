@@ -3,6 +3,7 @@ import { generateContent, generateStructured } from "../claude.js";
 import { supabase } from "../supabase.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { createHash } from "crypto";
 import { WORDLE500 } from "./wordlewords.js";
 
 interface CommandResult {
@@ -158,6 +159,9 @@ const TTL_DAYS: Partial<Record<GameType, number>> = {
 const ARCHIVE_DIR = process.env.BANTERAGENT_DATA_DIR || join(process.cwd(), "data");
 const ARCHIVE_PATH = join(ARCHIVE_DIR, "used-answers.json");
 const LOW_POOL_ALERT_PATH = join(ARCHIVE_DIR, "low-pool-alerts.json");
+const EXTRA_POOL_PATH = join(ARCHIVE_DIR, "pool-extra.json");
+const QUARANTINE_PATH = join(ARCHIVE_DIR, "pool-quarantine.json");
+const QUALITY_CACHE_PATH = join(ARCHIVE_DIR, "game-quality-cache.json");
 export const LOW_WATERMARK = Number.parseInt(process.env.GAME_LOW_WATERMARK ?? "10", 10);
 const ARCHIVE_REMOTE = !process.env.BANTERAGENT_DATA_DIR;
 
@@ -166,6 +170,12 @@ if (!existsSync(ARCHIVE_DIR)) mkdirSync(ARCHIVE_DIR, { recursive: true });
 let _archive: ArchiveMap = {};    // permanent games -- file-backed
 let _ttlArchive: ArchiveMap = {}; // TTL games -- memory-only (synced from Supabase on start)
 try { _archive = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8")); } catch {}
+
+let structuredGenerator = generateStructured;
+
+export function setGameTestHooks(hooks: { generateStructured?: typeof generateStructured }): void {
+  if (hooks.generateStructured) structuredGenerator = hooks.generateStructured;
+}
 
 function saveArchive(): void {
   try { mkdirSync(ARCHIVE_DIR, { recursive: true }); } catch {}
@@ -240,13 +250,45 @@ export interface PoolStatus {
   remaining: number;
 }
 
+export type RefreshableGame = FinitePoolGame | "anagram" | "hangman";
+type QuizItem = { emojis: string; answer: string; hint: string };
+type TriviaItem = { question: string; answer: string; hint: string; fact: string };
+type WordItem = string;
+type ExtraPools = Partial<Record<RefreshableGame, unknown[]>>;
+type QuarantineMap = Partial<Record<RefreshableGame, string[]>>;
+
+function loadExtraPools(): ExtraPools { return readJsonFile<ExtraPools>(EXTRA_POOL_PATH, {}); }
+function saveExtraPools(pools: ExtraPools): void { writeJsonFile(EXTRA_POOL_PATH, pools); }
+function loadQuarantine(): QuarantineMap { return readJsonFile<QuarantineMap>(QUARANTINE_PATH, {}); }
+function saveQuarantine(q: QuarantineMap): void { writeJsonFile(QUARANTINE_PATH, q); }
+
+function keyForItem(type: RefreshableGame, item: unknown): string {
+  if (type === "quiz" || type === "brandquiz") return String((item as QuizItem).answer ?? "").toLowerCase();
+  if (type === "trivia") return String((item as TriviaItem).answer ?? "").toLowerCase();
+  return String(item ?? "").toLowerCase();
+}
+
+function filterQuarantined<T>(type: RefreshableGame, pool: T[]): T[] {
+  const blocked = new Set((loadQuarantine()[type] ?? []).map((x) => x.toLowerCase()));
+  if (blocked.size === 0) return pool;
+  return pool.filter((item) => !blocked.has(keyForItem(type, item)));
+}
+
+function getQuizPool(): QuizItem[] { return filterQuarantined("quiz", [...CURATED_QUIZZES, ...((loadExtraPools().quiz ?? []) as QuizItem[])]); }
+function getBrandQuizPool(): QuizItem[] { return filterQuarantined("brandquiz", [...CURATED_BRAND_QUIZZES, ...((loadExtraPools().brandquiz ?? []) as QuizItem[])]); }
+function getTriviaPool(): TriviaItem[] { return filterQuarantined("trivia", [...CURATED_TRIVIA, ...((loadExtraPools().trivia ?? []) as TriviaItem[])]); }
+function getFastFingerPool(): string[] { return filterQuarantined("fastfinger", [...FASTFINGER_WORDS, ...((loadExtraPools().fastfinger ?? []) as string[])]); }
+function getWordlePool(): string[] { return filterQuarantined("wordle", [...WORDLE500, ...((loadExtraPools().wordle ?? []) as string[])]); }
+function getAnagramPool(): string[] { return filterQuarantined("anagram", [...WORDLE500, ...((loadExtraPools().anagram ?? []) as string[])]); }
+function getHangmanPool(): string[] { return filterQuarantined("hangman", [...WORDLE500, ...((loadExtraPools().hangman ?? []) as string[])]); }
+
 function getPoolKeys(type: FinitePoolGame): string[] {
   switch (type) {
-    case "quiz": return CURATED_QUIZZES.map((q) => q.answer.toLowerCase());
-    case "brandquiz": return CURATED_BRAND_QUIZZES.map((q) => q.answer.toLowerCase());
-    case "trivia": return CURATED_TRIVIA.map((q) => q.answer.toLowerCase());
-    case "fastfinger": return FASTFINGER_WORDS.map((w) => w.toLowerCase());
-    case "wordle": return WORDLE500.map((w) => w.toLowerCase());
+    case "quiz": return getQuizPool().map((q) => q.answer.toLowerCase());
+    case "brandquiz": return getBrandQuizPool().map((q) => q.answer.toLowerCase());
+    case "trivia": return getTriviaPool().map((q) => q.answer.toLowerCase());
+    case "fastfinger": return getFastFingerPool().map((w) => w.toLowerCase());
+    case "wordle": return getWordlePool().map((w) => w.toLowerCase());
   }
 }
 
@@ -289,6 +331,178 @@ export async function maybeNotifyLowPool(type: FinitePoolGame, remaining: number
     console.warn("[games] low-pool notify failed:", e);
   }
   return true;
+}
+
+export interface GameQualityFailure { key: string; reason: string }
+export interface GameCheckResult { checked: number; failures: GameQualityFailure[]; quarantined: number }
+
+function normalizeLoose(text: string): string { return text.toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+
+function jsonArrayFromText(text: string): unknown[] {
+  const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  try { const parsed = JSON.parse(cleaned.slice(start, end + 1)); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function coerceGeneratedItem(type: RefreshableGame, raw: unknown): unknown | null {
+  if (type === "quiz" || type === "brandquiz") {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    return { emojis: String(obj.emojis ?? ""), answer: String(obj.answer ?? ""), hint: String(obj.hint ?? "") };
+  }
+  if (type === "trivia") {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    return { question: String(obj.question ?? ""), answer: String(obj.answer ?? ""), hint: String(obj.hint ?? ""), fact: String(obj.fact ?? "") };
+  }
+  if (typeof raw === "string") return raw.trim().toLowerCase();
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    return String(obj.word ?? obj.answer ?? "").trim().toLowerCase();
+  }
+  return null;
+}
+
+export function validateGameItemRules(type: RefreshableGame, item: unknown): GameQualityFailure[] {
+  const key = keyForItem(type, item);
+  const failures: GameQualityFailure[] = [];
+  if (!key || key.length > 64) failures.push({ key, reason: "answer is empty or too long" });
+  if (type === "quiz" || type === "brandquiz") {
+    const quiz = item as QuizItem;
+    if (!String(quiz.emojis ?? "").trim()) failures.push({ key, reason: "emoji clue is missing" });
+    if (normalizeLoose(String(quiz.emojis ?? "")).includes(normalizeLoose(String(quiz.answer ?? "")))) failures.push({ key, reason: "emoji clue leaks answer" });
+    if (!String(quiz.hint ?? "").trim()) failures.push({ key, reason: "hint is missing" });
+  } else if (type === "trivia") {
+    const trivia = item as TriviaItem;
+    if (!String(trivia.question ?? "").trim()) failures.push({ key, reason: "trivia prompt is missing" });
+  } else if (type === "wordle" || type === "anagram" || type === "hangman") {
+    if (!/^[a-z]{5}$/i.test(String(item))) failures.push({ key, reason: "word must be exactly 5 A-Z letters" });
+  } else if (type === "fastfinger") {
+    if (!/^[a-z]+$/i.test(String(item))) failures.push({ key, reason: "fastfinger word must contain only A-Z letters" });
+  }
+  return failures;
+}
+
+function semanticSubject(type: RefreshableGame, item: unknown): { clue: string; answer: string } | null {
+  if (type === "quiz" || type === "brandquiz") {
+    const q = item as QuizItem;
+    return { clue: `${q.emojis}\n${q.hint}`, answer: q.answer };
+  }
+  if (type === "trivia") {
+    const t = item as TriviaItem;
+    return { clue: t.question, answer: t.answer };
+  }
+  return null;
+}
+
+function qualityHash(type: RefreshableGame, subject: { clue: string; answer: string }): string {
+  return createHash("sha256").update(`${type}\n${subject.clue}\n${subject.answer}`).digest("hex");
+}
+
+function parseSemanticLines(text: string): Map<number, string | null> {
+  const out = new Map<number, string | null>();
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(\d+)\s*[:.)-]?\s*(PASS|FAIL)\s*:?(.*)$/i);
+    if (!m) continue;
+    out.set(Number(m[1]), m[2]!.toUpperCase() === "PASS" ? null : (m[3]?.trim() || "semantic validator failed"));
+  }
+  return out;
+}
+
+async function validateSemantic(type: RefreshableGame, items: unknown[]): Promise<GameQualityFailure[]> {
+  const cache = readJsonFile<Record<string, { pass: boolean; reason: string }>>(QUALITY_CACHE_PATH, {});
+  const failures: GameQualityFailure[] = [];
+  const pending: Array<{ item: unknown; subject: { clue: string; answer: string }; hash: string }> = [];
+  for (const item of items) {
+    const subject = semanticSubject(type, item);
+    if (!subject) continue;
+    const hash = qualityHash(type, subject);
+    const cached = cache[hash];
+    if (cached) {
+      if (!cached.pass) failures.push({ key: keyForItem(type, item), reason: cached.reason });
+    } else pending.push({ item, subject, hash });
+  }
+  if (pending.length === 0) return failures;
+  const block = pending.map((p, i) => `${i}: CLUE: ${p.subject.clue}\nANSWER: ${p.subject.answer}`).join("\n\n");
+  const response = await structuredGenerator(`Quality-check ${type} questions. For each numbered item, answer exactly one line: "<index> PASS" or "<index> FAIL: <reason>". Does the answer correctly & unambiguously match the clue, with a consistent category (a Vijay-movie clue MUST resolve to a Vijay movie)?\n\n${block}`);
+  const parsed = parseSemanticLines(response);
+  for (let i = 0; i < pending.length; i++) {
+    const p = pending[i]!;
+    const reason = parsed.has(i) ? parsed.get(i)! : "semantic validator returned unparseable response";
+    cache[p.hash] = { pass: reason === null, reason: reason ?? "" };
+    if (reason !== null) failures.push({ key: keyForItem(type, p.item), reason });
+  }
+  writeJsonFile(QUALITY_CACHE_PATH, cache);
+  return failures;
+}
+
+async function validateGameItems(type: RefreshableGame, items: unknown[], semantic = true): Promise<GameQualityFailure[]> {
+  const ruleFailures = items.flatMap((item) => validateGameItemRules(type, item));
+  if (!semantic) return ruleFailures;
+  const failed = new Set(ruleFailures.map((f) => f.key));
+  return [...ruleFailures, ...(await validateSemantic(type, items.filter((item) => !failed.has(keyForItem(type, item)))))];
+}
+
+function currentPoolItems(type: RefreshableGame): unknown[] {
+  switch (type) {
+    case "quiz": return getQuizPool();
+    case "brandquiz": return getBrandQuizPool();
+    case "trivia": return getTriviaPool();
+    case "fastfinger": return getFastFingerPool();
+    case "wordle": return getWordlePool();
+    case "anagram": return getAnagramPool();
+    case "hangman": return getHangmanPool();
+  }
+}
+
+function appendExtraItems(type: RefreshableGame, items: unknown[]): void {
+  const pools = loadExtraPools();
+  pools[type] = [...(pools[type] ?? []), ...items];
+  saveExtraPools(pools);
+}
+
+function refreshPrompt(type: RefreshableGame, count: number): string {
+  return `Generate ${count} NEW ${type} game items. Reply JSON array only. Formats: quiz/brandquiz {"emojis":"emoji clue","answer":"short answer","hint":"hint"}; trivia {"question":"clear prompt","answer":"short answer","hint":"hint","fact":"fact"}; wordle/anagram/hangman strings of exactly 5 A-Z letters; fastfinger A-Z word strings.`;
+}
+
+export async function refreshGamesAdd(groupId: string, type: RefreshableGame, count = 20): Promise<string> {
+  const bounded = Math.max(1, Math.min(Number.isFinite(count) ? count : 20, 50));
+  const generated = jsonArrayFromText(await structuredGenerator(refreshPrompt(type, bounded)))
+    .map((item) => coerceGeneratedItem(type, item))
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const existing = new Set([...currentPoolItems(type).map((item) => keyForItem(type, item)), ...getArchived(groupId, archiveTypeForPool(type as FinitePoolGame))].map((x) => x.toLowerCase()));
+  const rejected: GameQualityFailure[] = [];
+  const candidates: unknown[] = [];
+  for (const item of generated) {
+    const key = keyForItem(type, item);
+    if (existing.has(key)) rejected.push({ key, reason: "duplicate vs pool or archive" });
+    else { existing.add(key); candidates.push(item); }
+  }
+  const qualityFailures = await validateGameItems(type, candidates, true);
+  rejected.push(...qualityFailures);
+  const failed = new Set(qualityFailures.map((f) => f.key));
+  const accepted = candidates.filter((item) => !failed.has(keyForItem(type, item)));
+  appendExtraItems(type, accepted);
+  const status = type === "anagram" || type === "hangman" ? null : getPoolStatus(groupId).find((s) => s.type === type);
+  const remaining = status ? `${status.remaining}/${status.total}` : String(currentPoolItems(type).length);
+  return `? refreshgames add ${type}: added ${accepted.length}, rejected ${rejected.length}, remaining ${remaining}`;
+}
+
+export async function runGameCheck(type: RefreshableGame, quarantineFailures = false): Promise<GameCheckResult> {
+  const items = currentPoolItems(type);
+  const failures = await validateGameItems(type, items, true);
+  let quarantined = 0;
+  if (quarantineFailures && failures.length > 0) {
+    const q = loadQuarantine();
+    const keys = new Set((q[type] ?? []).map((x) => x.toLowerCase()));
+    for (const f of failures) keys.add(f.key.toLowerCase());
+    q[type] = [...keys];
+    saveQuarantine(q);
+    quarantined = failures.length;
+  }
+  return { checked: items.length, failures, quarantined };
 }
 
 // Call once on bot startup -- loads Supabase archive into caches (handles wipe/redeployment)
@@ -718,10 +932,10 @@ export async function awardPoints(
 // ===== QUIZ — Tamil Movie Emoji Quiz (curated list — no Claude generation) =====
 async function startQuiz(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "quiz");
-  let pool = CURATED_QUIZZES.filter((q) => !archived.includes(q.answer.toLowerCase()));
+  let pool = getQuizPool().filter((q) => !archived.includes(q.answer.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "quiz");
-    pool = CURATED_QUIZZES;
+    pool = getQuizPool();
   }
   const remainingBeforePick = pool.length;
   const quiz = randPick(pool);
@@ -744,10 +958,10 @@ async function startQuiz(msg: BotMessage): Promise<string> {
 // ===== BRAND QUIZ — Guess the Indian brand from emoji clues =====
 async function startBrandQuiz(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "brandquiz");
-  let pool = CURATED_BRAND_QUIZZES.filter((q) => !archived.includes(q.answer.toLowerCase()));
+  let pool = getBrandQuizPool().filter((q) => !archived.includes(q.answer.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "brandquiz");
-    pool = CURATED_BRAND_QUIZZES;
+    pool = getBrandQuizPool();
   }
   const remainingBeforePick = pool.length;
   const quiz = randPick(pool);
@@ -963,10 +1177,10 @@ async function startAntakshari(msg: BotMessage): Promise<string> {
 // ===== TRIVIA — Curated verified questions (no Claude generation to prevent wrong facts) =====
 async function startTrivia(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "trivia");
-  let pool = CURATED_TRIVIA.filter((q) => !archived.includes(q.answer.toLowerCase()));
+  let pool = getTriviaPool().filter((q) => !archived.includes(q.answer.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "trivia");
-    pool = CURATED_TRIVIA;
+    pool = getTriviaPool();
   }
   const remainingBeforePick = pool.length;
   const trivia = randPick(pool);
@@ -1027,8 +1241,8 @@ async function startWordle(msg: BotMessage, args = ""): Promise<string> {
   }
 
   let archived = getArchived(msg.groupId, "wordle500");
-  let pool = WORDLE500.filter(w => !archived.includes(w));
-  if (pool.length === 0) { resetArchive(msg.groupId, "wordle500"); pool = WORDLE500; }
+  let pool = getWordlePool().filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "wordle500"); pool = getWordlePool(); }
   const remainingBeforePick = pool.length;
   const word = randPick(pool).toUpperCase();
   archiveAnswer(msg.groupId, "wordle500", word.toLowerCase());
@@ -1117,8 +1331,8 @@ export function scramble(word: string): string {
 // ===== ANAGRAM RACE — first to unscramble wins (no shared-board problem) =====
 async function startAnagram(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "anagram");
-  let pool = WORDLE500.filter(w => !archived.includes(w));
-  if (pool.length === 0) { resetArchive(msg.groupId, "anagram"); pool = WORDLE500; }
+  let pool = getAnagramPool().filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "anagram"); pool = getAnagramPool(); }
   const word = randPick(pool).toUpperCase();
   archiveAnswer(msg.groupId, "anagram", word.toLowerCase());
   const scrambled = scramble(word);
@@ -1133,8 +1347,8 @@ export function renderHangman(word: string, guessed: string[]): string {
 }
 async function startHangman(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "hangman");
-  let pool = WORDLE500.filter(w => !archived.includes(w));
-  if (pool.length === 0) { resetArchive(msg.groupId, "hangman"); pool = WORDLE500; }
+  let pool = getHangmanPool().filter(w => !archived.includes(w));
+  if (pool.length === 0) { resetArchive(msg.groupId, "hangman"); pool = getHangmanPool(); }
   const word = randPick(pool).toUpperCase();
   archiveAnswer(msg.groupId, "hangman", word.toLowerCase());
   await createGame(msg.groupId, "hangman", { word, guessed: [], wrong: [], lives: 6, ended: false });
@@ -1721,10 +1935,10 @@ const FASTFINGER_WORDS = [
 // ===== FAST FINGER — launch game with reverse-word twist =====
 async function launchFastFingerGame(msg: BotMessage, player1Name: string): Promise<string> {
   let archived = getArchived(msg.groupId, "fastfinger");
-  let pool = FASTFINGER_WORDS.filter((w) => !archived.includes(w.toLowerCase()));
+  let pool = getFastFingerPool().filter((w) => !archived.includes(w.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "fastfinger");
-    pool = FASTFINGER_WORDS;
+    pool = getFastFingerPool();
   }
   const remainingBeforePick = pool.length;
   const word = randPick(pool);

@@ -2,7 +2,7 @@
 // Uses node:test (built-in). Pure functions + file-backed archive, no live services.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,4 +132,57 @@ test("low pool notify: posts once per game per IST day", async () => {
   } finally {
     globalThis.fetch = oldFetch;
   }
+});
+
+
+test("quality rules: cover words, emoji leak, and prompt basics", () => {
+  assert.deepEqual(g.validateGameItemRules("wordle", "about"), []);
+  assert.equal(g.validateGameItemRules("wordle", "abcd")[0]!.reason, "word must be exactly 5 A-Z letters");
+  assert.equal(g.validateGameItemRules("anagram", "abc12")[0]!.reason, "word must be exactly 5 A-Z letters");
+  assert.equal(g.validateGameItemRules("fastfinger", "hello").length, 0);
+  assert.equal(g.validateGameItemRules("fastfinger", "bad1")[0]!.reason, "fastfinger word must contain only A-Z letters");
+  assert.equal(g.validateGameItemRules("quiz", { emojis: "kaththi", answer: "kaththi", hint: "hint" })[0]!.reason, "emoji clue leaks answer");
+  assert.equal(g.validateGameItemRules("trivia", { question: "", answer: "42", hint: "", fact: "" })[0]!.reason, "trivia prompt is missing");
+});
+
+test("refreshgames add: dedupes, validates, and appends survivors", async () => {
+  g.setGameTestHooks({ generateStructured: async () => JSON.stringify(["newword", "ADYAR", "bad1"]) });
+  const response = await g.refreshGamesAdd("g-refresh", "fastfinger", 3);
+  assert.match(response, /added 1, rejected 2/);
+  const extra = JSON.parse(readFileSync(join(TMP, "pool-extra.json"), "utf8"));
+  assert.deepEqual(extra.fastfinger, ["newword"]);
+});
+
+test("refreshgames add: semantic checker drops Claude failures", async () => {
+  const replies = [
+    JSON.stringify([
+      { emojis: "??", answer: "pizza", hint: "food clue" },
+      { emojis: "??", answer: "wrong", hint: "Vijay movie clue" },
+    ]),
+    "0 PASS\n1 FAIL: wrong Vijay movie",
+  ];
+  g.setGameTestHooks({ generateStructured: async () => replies.shift()! });
+  const response = await g.refreshGamesAdd("g-refresh-semantic", "quiz", 2);
+  assert.match(response, /added 1, rejected 1/);
+  const extra = JSON.parse(readFileSync(join(TMP, "pool-extra.json"), "utf8"));
+  assert.equal(extra.quiz.at(-1).answer, "pizza");
+});
+
+test("gamecheck: unparseable semantic response fails closed", async () => {
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ quiz: [{ emojis: "??", answer: "movie", hint: "cinema clue" }] }));
+  g.setGameTestHooks({ generateStructured: async () => "not parseable" });
+  const result = await g.runGameCheck("quiz", false);
+  assert.ok(result.failures.some(f => f.key === "movie" && f.reason.includes("unparseable")));
+});
+
+test("gamecheck quarantine: writes failing keys and excludes them from pools", async () => {
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({ fastfinger: ["bad1"] }));
+  const before = g.getPoolStatus("g-quarantine").find(s => s.type === "fastfinger")!;
+  const result = await g.runGameCheck("fastfinger", true);
+  const after = g.getPoolStatus("g-quarantine").find(s => s.type === "fastfinger")!;
+  assert.equal(result.quarantined, 1);
+  assert.ok(result.failures.some(f => f.key === "bad1"));
+  assert.equal(after.total, before.total - 1);
+  const quarantine = JSON.parse(readFileSync(join(TMP, "pool-quarantine.json"), "utf8"));
+  assert.ok(quarantine.fastfinger.includes("bad1"));
 });
