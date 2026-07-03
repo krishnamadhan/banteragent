@@ -125,6 +125,34 @@ async function handlePiCommand(
       break;
     }
 
+    // ── Full self-check (reuses the cron script) ─────────────────────────────
+    case "selfcheck":
+    case "sc": {
+      const out = await runSafe("/home/pi/scripts/pi-selfcheck.py --print", 30000);
+      reply = out || "self-check produced no output — is the script present?";
+      break;
+    }
+
+    // ── Cosmo + LED status ───────────────────────────────────────────────────
+    case "led": {
+      const health = await runSafe("curl -s -m5 http://127.0.0.1:8000/health", 8000);
+      const ledH = await runSafe("curl -s -m5 http://127.0.0.1:8000/led/health", 8000);
+      let out = "🤖 *Cosmo / LED*\n";
+      try {
+        const h = JSON.parse(health);
+        out += `Cosmo API: ✅ up ${h.uptime_s}s · ${h.cpu_temp_c}°C · RAM ${h.free_ram_mb}MB\n`;
+      } catch { out += "Cosmo API: 🚨 down (cosmo not running?)\n"; }
+      try {
+        const l = JSON.parse(ledH);
+        out += `LED strip: ${l.connected ? "✅ connected" : "⚪ not connected"} · ${l.writes_ok} ok/${l.writes_fail} fail`;
+        if (l.tv_sync) out += "\n📺 TV sync active";
+        if (l.scene) out += `\n🎬 scene: ${l.scene}`;
+        if (l.last_error) out += `\n⚠️ ${l.last_error}`;
+      } catch { out += "LED: (no data)"; }
+      reply = out;
+      break;
+    }
+
     // ── v2: top processes by memory ──────────────────────────────────────────
     case "top": {
       const out = await runSafe("ps aux --sort=-rss | head -8 | awk 'NR>1{printf \"%.0fMB %.0f%% %s\\n\", $6/1024, $3, substr($11,1,40)}'");
@@ -319,7 +347,7 @@ async function handlePiCommand(
     }
 
     case "help":
-      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n!pi status — Full system report\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n!pi cosmo [n] — Last N Cosmo reactions\n\n*LED / TV Ambilight*\n!led calibrate — Show full red TV screen; detect TV boundary and send marked image\n!led tv on / off — Sync strip to TV colours / stop sync\n!led <colour> / off / bright <0-100> — Manual strip control\n!cosmo live — Open camera live feed\n\n*Danger Zone*\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
+      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n🔍 !pi selfcheck — Deep validation (services/backups/watchdog/cosmo/LED)\n!pi status — Full system report\n🤖 !pi led — Cosmo API + LED strip health\n!pi cosmo [n] — Last N Cosmo reactions\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n\n*LED / TV Ambilight*\n!led calibrate — Show full red TV screen; detect TV boundary and send marked image\n!led tv on / off — Sync strip to TV colours / stop sync\n!led <colour> / off / bright <0-100> — Manual strip control\n!cosmo live — Open camera live feed\n\n*Danger Zone*\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
       break;
 
     default:
