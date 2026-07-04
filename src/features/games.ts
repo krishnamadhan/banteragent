@@ -331,55 +331,6 @@ function getStoryTimePool(): StoryItem[] { return filterQuarantined("storytime",
 function getRiddlePool(): RiddleItem[] { return filterQuarantined("riddle", [...RIDDLE_CATEGORIES, ...((loadExtraPools().riddle ?? []) as RiddleItem[])]); }
 function getWyrPool(): WyrItem[] { return filterQuarantined("wyr", [...WYR_THEMES, ...((loadExtraPools().wyr ?? []) as WyrItem[])]); }
 
-type CuratedStringPoolGame = "song" | "dialogue" | "twotruthsonelie" | "mostlikely" | "storytime" | "riddle" | "wyr";
-type CuratedExtraPools = Partial<Record<CuratedStringPoolGame, unknown[]>>;
-type CuratedQuarantineMap = Partial<Record<CuratedStringPoolGame, string[]>>;
-
-function loadCuratedExtraPools(): CuratedExtraPools { return readJsonFile<CuratedExtraPools>(EXTRA_POOL_PATH, {}); }
-function loadCuratedQuarantine(): CuratedQuarantineMap { return readJsonFile<CuratedQuarantineMap>(QUARANTINE_PATH, {}); }
-
-function keyForCuratedItem(type: CuratedStringPoolGame, item: unknown): string {
-  if (type === "dialogue") return String((item as { answer?: string }).answer ?? "").toLowerCase();
-  if (type === "song") return String((item as { answer?: string }).answer ?? "").toLowerCase();
-  if (type === "twotruthsonelie") return String((item as { context?: string }).context ?? "").toLowerCase();
-  if (type === "storytime") return String(item ?? "").toLowerCase().slice(0, 60);
-  return String(item ?? "").toLowerCase();
-}
-
-function filterCuratedQuarantined<T>(type: CuratedStringPoolGame, pool: T[]): T[] {
-  const blocked = new Set((loadCuratedQuarantine()[type] ?? []).map((x) => x.toLowerCase()));
-  if (blocked.size === 0) return pool;
-  return pool.filter((item) => !blocked.has(keyForCuratedItem(type, item)));
-}
-
-function getDialoguePool(): { dialogue: string; answer: string; speaker: string; hint: string }[] {
-  return filterCuratedQuarantined("dialogue", [...CURATED_DIALOGUES, ...((loadCuratedExtraPools().dialogue ?? []) as { dialogue: string; answer: string; speaker: string; hint: string }[])]);
-}
-
-function getSongPool(): { lines: string[]; answer: string; movie: string; hint: string }[] {
-  return filterCuratedQuarantined("song", [...SONG_QUIZ, ...((loadCuratedExtraPools().song ?? []) as { lines: string[]; answer: string; movie: string; hint: string }[])]);
-}
-
-function getTwoTruthsPool(): TwoTruthsEntry[] {
-  return filterCuratedQuarantined("twotruthsonelie", [...TWO_TRUTHS_ONE_LIE, ...((loadCuratedExtraPools().twotruthsonelie ?? []) as TwoTruthsEntry[])]);
-}
-
-function getMostLikelyPool(): string[] {
-  return filterCuratedQuarantined("mostlikely", [...MOSTLIKELY_SCENARIOS, ...((loadCuratedExtraPools().mostlikely ?? []) as string[])]);
-}
-
-function getStoryTimePool(): string[] {
-  return filterCuratedQuarantined("storytime", [...STORY_STARTERS, ...((loadCuratedExtraPools().storytime ?? []) as string[])]);
-}
-
-function getRiddlePool(): string[] {
-  return filterCuratedQuarantined("riddle", [...RIDDLE_CATEGORIES, ...((loadCuratedExtraPools().riddle ?? []) as string[])]);
-}
-
-function getWyrPool(): string[] {
-  return filterCuratedQuarantined("wyr", [...WYR_THEMES, ...((loadCuratedExtraPools().wyr ?? []) as string[])]);
-}
-
 function getPoolKeys(type: FinitePoolGame): string[] {
   switch (type) {
     case "quiz": return getQuizPool().map((q) => q.answer.toLowerCase());
