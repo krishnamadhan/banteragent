@@ -250,10 +250,44 @@ export interface PoolStatus {
   remaining: number;
 }
 
-export type RefreshableGame = FinitePoolGame | "anagram" | "hangman";
+export type RefreshableGame =
+  | FinitePoolGame
+  | "anagram"
+  | "hangman"
+  | "song"
+  | "dialogue"
+  | "twotruthsonelie"
+  | "mostlikely"
+  | "storytime"
+  | "riddle"
+  | "wyr";
+
+export const REFRESHABLE_GAMES: readonly RefreshableGame[] = [
+  "quiz",
+  "brandquiz",
+  "trivia",
+  "fastfinger",
+  "wordle",
+  "anagram",
+  "hangman",
+  "song",
+  "dialogue",
+  "twotruthsonelie",
+  "mostlikely",
+  "storytime",
+  "riddle",
+  "wyr",
+];
+
 type QuizItem = { emojis: string; answer: string; hint: string };
 type TriviaItem = { question: string; answer: string; hint: string; fact: string };
-type WordItem = string;
+type SongItem = { lines: string[]; answer: string; movie: string; hint: string };
+type DialogueItem = { dialogue: string; answer: string; speaker: string; hint: string };
+type TwoTruthsItem = { context: string; statements: [string, string, string]; lieIndex: 1 | 2 | 3; hint: string; explanation: string };
+type MostLikelyItem = string;
+type StoryItem = string;
+type RiddleItem = string;
+type WyrItem = string;
 type ExtraPools = Partial<Record<RefreshableGame, unknown[]>>;
 type QuarantineMap = Partial<Record<RefreshableGame, string[]>>;
 
@@ -265,6 +299,12 @@ function saveQuarantine(q: QuarantineMap): void { writeJsonFile(QUARANTINE_PATH,
 function keyForItem(type: RefreshableGame, item: unknown): string {
   if (type === "quiz" || type === "brandquiz") return String((item as QuizItem).answer ?? "").toLowerCase();
   if (type === "trivia") return String((item as TriviaItem).answer ?? "").toLowerCase();
+  if (type === "song") return String((item as SongItem).answer ?? "").toLowerCase();
+  if (type === "dialogue") return String((item as DialogueItem).answer ?? "").toLowerCase();
+  if (type === "twotruthsonelie") return String((item as TwoTruthsItem).context ?? "").toLowerCase();
+  if (type === "mostlikely") return String(item ?? "").toLowerCase();
+  if (type === "storytime") return String(item ?? "").toLowerCase().slice(0, 60);
+  if (type === "riddle" || type === "wyr") return String(item ?? "").toLowerCase();
   return String(item ?? "").toLowerCase();
 }
 
@@ -281,6 +321,13 @@ function getFastFingerPool(): string[] { return filterQuarantined("fastfinger", 
 function getWordlePool(): string[] { return filterQuarantined("wordle", [...WORDLE500, ...((loadExtraPools().wordle ?? []) as string[])]); }
 function getAnagramPool(): string[] { return filterQuarantined("anagram", [...WORDLE500, ...((loadExtraPools().anagram ?? []) as string[])]); }
 function getHangmanPool(): string[] { return filterQuarantined("hangman", [...WORDLE500, ...((loadExtraPools().hangman ?? []) as string[])]); }
+function getSongPool(): SongItem[] { return filterQuarantined("song", [...SONG_QUIZ, ...((loadExtraPools().song ?? []) as SongItem[])]); }
+function getDialoguePool(): DialogueItem[] { return filterQuarantined("dialogue", [...CURATED_DIALOGUES, ...((loadExtraPools().dialogue ?? []) as DialogueItem[])]); }
+function getTwoTruthsPool(): TwoTruthsItem[] { return filterQuarantined("twotruthsonelie", [...TWO_TRUTHS_ONE_LIE, ...((loadExtraPools().twotruthsonelie ?? []) as TwoTruthsItem[])]); }
+function getMostLikelyPool(): MostLikelyItem[] { return filterQuarantined("mostlikely", [...MOSTLIKELY_SCENARIOS, ...((loadExtraPools().mostlikely ?? []) as MostLikelyItem[])]); }
+function getStoryTimePool(): StoryItem[] { return filterQuarantined("storytime", [...STORY_STARTERS, ...((loadExtraPools().storytime ?? []) as StoryItem[])]); }
+function getRiddlePool(): RiddleItem[] { return filterQuarantined("riddle", [...RIDDLE_CATEGORIES, ...((loadExtraPools().riddle ?? []) as RiddleItem[])]); }
+function getWyrPool(): WyrItem[] { return filterQuarantined("wyr", [...WYR_THEMES, ...((loadExtraPools().wyr ?? []) as WyrItem[])]); }
 
 function getPoolKeys(type: FinitePoolGame): string[] {
   switch (type) {
@@ -376,6 +423,49 @@ function coerceGeneratedItem(type: RefreshableGame, raw: unknown): unknown | nul
     const obj = raw as Record<string, unknown>;
     return { question: String(obj.question ?? ""), answer: String(obj.answer ?? ""), hint: String(obj.hint ?? ""), fact: String(obj.fact ?? "") };
   }
+  if (type === "song") {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    const lines = Array.isArray(obj.lines) ? obj.lines.map((line) => String(line ?? "").trim()).filter(Boolean) : [];
+    return { lines, answer: String(obj.answer ?? ""), movie: String(obj.movie ?? ""), hint: String(obj.hint ?? "") };
+  }
+  if (type === "dialogue") {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    return { dialogue: String(obj.dialogue ?? ""), answer: String(obj.answer ?? ""), speaker: String(obj.speaker ?? ""), hint: String(obj.hint ?? "") };
+  }
+  if (type === "twotruthsonelie") {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    const statements = Array.isArray(obj.statements) ? obj.statements.map((statement) => String(statement ?? "").trim()).filter(Boolean) : [];
+    return {
+      context: String(obj.context ?? ""),
+      statements: statements.slice(0, 3) as [string, string, string],
+      lieIndex: Number(obj.lieIndex ?? 0) as 1 | 2 | 3,
+      hint: String(obj.hint ?? ""),
+      explanation: String(obj.explanation ?? ""),
+    };
+  }
+  if (type === "mostlikely") {
+    if (typeof raw === "string") return raw.trim();
+    if (raw && typeof raw === "object") return String((raw as Record<string, unknown>).scenario ?? "").trim();
+    return null;
+  }
+  if (type === "storytime") {
+    if (typeof raw === "string") return raw.trim();
+    if (raw && typeof raw === "object") return String((raw as Record<string, unknown>).startLine ?? "").trim();
+    return null;
+  }
+  if (type === "riddle") {
+    if (typeof raw === "string") return raw.trim();
+    if (raw && typeof raw === "object") return String((raw as Record<string, unknown>).category ?? "").trim();
+    return null;
+  }
+  if (type === "wyr") {
+    if (typeof raw === "string") return raw.trim();
+    if (raw && typeof raw === "object") return String((raw as Record<string, unknown>).theme ?? "").trim();
+    return null;
+  }
   if (typeof raw === "string") return raw.trim().toLowerCase();
   if (raw && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
@@ -396,6 +486,35 @@ export function validateGameItemRules(type: RefreshableGame, item: unknown): Gam
   } else if (type === "trivia") {
     const trivia = item as TriviaItem;
     if (!String(trivia.question ?? "").trim()) failures.push({ key, reason: "trivia prompt is missing" });
+  } else if (type === "song") {
+    const song = item as SongItem;
+    if (!Array.isArray(song.lines) || song.lines.length < 2 || song.lines.some((line) => !String(line ?? "").trim())) failures.push({ key, reason: "song clue needs at least 2 translated lyric lines" });
+    if (!String(song.answer ?? "").trim()) failures.push({ key, reason: "song answer is missing" });
+    if (!String(song.movie ?? "").trim()) failures.push({ key, reason: "song movie is missing" });
+    if (!String(song.hint ?? "").trim()) failures.push({ key, reason: "song hint is missing" });
+    if (normalizeLoose((song.lines ?? []).join(" ")).includes(normalizeLoose(String(song.answer ?? "")))) failures.push({ key, reason: "song clue leaks answer" });
+  } else if (type === "dialogue") {
+    const dialogue = item as DialogueItem;
+    if (!String(dialogue.dialogue ?? "").trim()) failures.push({ key, reason: "dialogue prompt is missing" });
+    if (!String(dialogue.answer ?? "").trim()) failures.push({ key, reason: "dialogue answer is missing" });
+    if (!String(dialogue.speaker ?? "").trim()) failures.push({ key, reason: "dialogue speaker is missing" });
+    if (!String(dialogue.hint ?? "").trim()) failures.push({ key, reason: "dialogue hint is missing" });
+    if (normalizeLoose(String(dialogue.dialogue ?? "")).includes(normalizeLoose(String(dialogue.answer ?? "")))) failures.push({ key, reason: "dialogue clue leaks answer" });
+  } else if (type === "twotruthsonelie") {
+    const t = item as TwoTruthsItem;
+    if (!String(t.context ?? "").trim()) failures.push({ key, reason: "2 truths 1 lie context is missing" });
+    if (!Array.isArray(t.statements) || t.statements.length !== 3 || t.statements.some((statement) => !String(statement ?? "").trim())) failures.push({ key, reason: "2 truths 1 lie needs exactly 3 statements" });
+    if (![1, 2, 3].includes(Number(t.lieIndex))) failures.push({ key, reason: "2 truths 1 lie lieIndex must be 1, 2, or 3" });
+    if (!String(t.hint ?? "").trim()) failures.push({ key, reason: "2 truths 1 lie hint is missing" });
+    if (!String(t.explanation ?? "").trim()) failures.push({ key, reason: "2 truths 1 lie explanation is missing" });
+  } else if (type === "mostlikely") {
+    if (!String(item ?? "").trim()) failures.push({ key, reason: "scenario is missing" });
+  } else if (type === "storytime") {
+    if (!String(item ?? "").trim()) failures.push({ key, reason: "story starter is missing" });
+  } else if (type === "riddle") {
+    if (!String(item ?? "").trim()) failures.push({ key, reason: "riddle category is missing" });
+  } else if (type === "wyr") {
+    if (!String(item ?? "").trim()) failures.push({ key, reason: "wyr theme is missing" });
   } else if (type === "wordle" || type === "anagram" || type === "hangman") {
     if (!/^[a-z]{5}$/i.test(String(item))) failures.push({ key, reason: "word must be exactly 5 A-Z letters" });
   } else if (type === "fastfinger") {
@@ -412,6 +531,23 @@ function semanticSubject(type: RefreshableGame, item: unknown): { clue: string; 
   if (type === "trivia") {
     const t = item as TriviaItem;
     return { clue: t.question, answer: t.answer };
+  }
+  if (type === "song") {
+    const song = item as SongItem;
+    return { clue: `${song.lines.join("\n")}\n${song.movie}\n${song.hint}`, answer: song.answer };
+  }
+  if (type === "dialogue") {
+    const dialogue = item as DialogueItem;
+    return { clue: `${dialogue.dialogue}\n${dialogue.speaker}\n${dialogue.hint}`, answer: dialogue.answer };
+  }
+  if (type === "twotruthsonelie") {
+    const t = item as TwoTruthsItem;
+    const lie = t.statements?.[Number(t.lieIndex) - 1] ?? "";
+    return { clue: `${t.context}\n${t.statements.join("\n")}\nLie index: ${t.lieIndex}\n${t.explanation}`, answer: lie };
+  }
+  if (type === "mostlikely" || type === "storytime" || type === "riddle" || type === "wyr") {
+    const text = String(item ?? "").trim();
+    return text ? { clue: text, answer: text } : null;
   }
   return null;
 }
@@ -473,6 +609,13 @@ function currentPoolItems(type: RefreshableGame): unknown[] {
     case "wordle": return getWordlePool();
     case "anagram": return getAnagramPool();
     case "hangman": return getHangmanPool();
+    case "song": return getSongPool();
+    case "dialogue": return getDialoguePool();
+    case "twotruthsonelie": return getTwoTruthsPool();
+    case "mostlikely": return getMostLikelyPool();
+    case "storytime": return getStoryTimePool();
+    case "riddle": return getRiddlePool();
+    case "wyr": return getWyrPool();
   }
 }
 
@@ -483,10 +626,46 @@ function appendExtraItems(type: RefreshableGame, items: unknown[]): void {
 }
 
 function refreshPrompt(type: RefreshableGame, count: number): string {
-  return `Generate ${count} NEW ${type} game items. Reply JSON array only. Formats: quiz/brandquiz {"emojis":"emoji clue","answer":"short answer","hint":"hint"}; trivia {"question":"clear prompt","answer":"short answer","hint":"hint","fact":"fact"}; wordle/anagram/hangman strings of exactly 5 A-Z letters; fastfinger A-Z word strings.`;
+  switch (type) {
+    case "quiz":
+    case "brandquiz":
+      return `Generate ${count} NEW ${type} game items. Reply JSON array only. Each item must be {"emojis":"emoji clue","answer":"short answer","hint":"hint"}.`;
+    case "trivia":
+      return `Generate ${count} NEW trivia items. Reply JSON array only. Each item must be {"question":"clear prompt","answer":"short answer","hint":"hint","fact":"fact"}.`;
+    case "song":
+      return `Generate ${count} NEW Tamil song quiz items. Reply JSON array only. Each item must be {"lines":["translated line 1","translated line 2"],"answer":"song title","movie":"movie or album","hint":"hint"}.`;
+    case "dialogue":
+      return `Generate ${count} NEW Tamil movie dialogue items. Reply JSON array only. Each item must be {"dialogue":"iconic dialogue","answer":"movie title","speaker":"speaker name","hint":"hint"}.`;
+    case "twotruthsonelie":
+      return `Generate ${count} NEW 2 truths 1 lie items. Reply JSON array only. Each item must be {"context":"short topic","statements":["truth 1","truth 2","lie"],"lieIndex":1|2|3,"hint":"hint","explanation":"why the lie is false"}.`;
+    case "mostlikely":
+      return `Generate ${count} NEW "most likely to" scenarios. Reply JSON array only. Each item must be a short scenario string suitable for a group voting game.`;
+    case "storytime":
+      return `Generate ${count} NEW story starters for a collaborative WhatsApp story game. Reply JSON array only. Each item must be a short, funny first line in Tanglish.`;
+    case "riddle":
+      return `Generate ${count} NEW Tamil cultural riddle categories. Reply JSON array only. Each item must be a short category string the Claude riddle generator can use later.`;
+    case "wyr":
+      return `Generate ${count} NEW "Would You Rather" themes. Reply JSON array only. Each item must be a short theme string the Claude question generator can use later.`;
+    case "anagram":
+    case "hangman":
+      return `Generate ${count} NEW ${type} word items. Reply JSON array only. Each item must be a string of exactly 5 A-Z letters.`;
+    case "fastfinger":
+      return `Generate ${count} NEW fastfinger words. Reply JSON array only. Each item must be an A-Z word string.`;
+  }
+  return "";
 }
 
-export async function refreshGamesAdd(groupId: string, type: RefreshableGame, count = 20): Promise<string> {
+interface RefreshGamesResult {
+  added: number;
+  rejected: number;
+  remaining: string;
+}
+
+function formatRefreshGamesResult(type: RefreshableGame, result: RefreshGamesResult): string {
+  return `✅ refreshgames add ${type}: added ${result.added}, rejected ${result.rejected}, remaining ${result.remaining}`;
+}
+
+async function refreshGamesAddResult(groupId: string, type: RefreshableGame, count = 20): Promise<RefreshGamesResult> {
   const bounded = Math.max(1, Math.min(Number.isFinite(count) ? count : 20, 50));
   const generated = jsonArrayFromText(await structuredGenerator(refreshPrompt(type, bounded)))
     .map((item) => coerceGeneratedItem(type, item))
@@ -506,7 +685,30 @@ export async function refreshGamesAdd(groupId: string, type: RefreshableGame, co
   appendExtraItems(type, accepted);
   const status = type === "anagram" || type === "hangman" ? null : getPoolStatus(groupId).find((s) => s.type === type);
   const remaining = status ? `${status.remaining}/${status.total}` : String(currentPoolItems(type).length);
-  return `✅ refreshgames add ${type}: added ${accepted.length}, rejected ${rejected.length}, remaining ${remaining}`;
+  return { added: accepted.length, rejected: rejected.length, remaining };
+}
+
+export async function refreshGamesAdd(groupId: string, type: RefreshableGame, count = 20): Promise<string> {
+  return formatRefreshGamesResult(type, await refreshGamesAddResult(groupId, type, count));
+}
+
+export async function refreshGamesAll(groupId: string, count = 20): Promise<string> {
+  const bounded = Math.max(1, Math.min(Number.isFinite(count) ? count : 20, 50));
+  const lines: string[] = [];
+  let totalAdded = 0;
+  let totalRejected = 0;
+  for (const type of REFRESHABLE_GAMES) {
+    try {
+      const result = await refreshGamesAddResult(groupId, type, bounded);
+      totalAdded += result.added;
+      totalRejected += result.rejected;
+      lines.push(`- ${type}: added ${result.added}, rejected ${result.rejected}, remaining ${result.remaining}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lines.push(`- ${type}: failed (${message})`);
+    }
+  }
+  return `✅ refreshgames all: refreshed ${REFRESHABLE_GAMES.length} types, total added ${totalAdded}, total rejected ${totalRejected}\n${lines.join("\n")}`;
 }
 
 export async function runGameCheck(type: RefreshableGame, quarantineFailures = false): Promise<GameCheckResult> {

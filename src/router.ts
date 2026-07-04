@@ -8,8 +8,10 @@ import {
   getArchiveStats,
   skipActiveGame,
   refreshGamesAdd,
+  refreshGamesAll,
   resetArchive,
   runGameCheck,
+  REFRESHABLE_GAMES,
   type RefreshableGame,
 } from "./features/games.js";
 import { handleCricketCommand } from "./features/cricket.js";
@@ -225,7 +227,7 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
 
 🐛 *Feedback:*
   !bug <description> — Report a bug or issue
-  !refreshgames — View archive stats + reset (owner only)\n!gamestats — View game archive stats`,
+  !refreshgames — View archive stats / add / all / reset (owner only)\n!gamestats — View game archive stats`,
       };
 
     // Games
@@ -468,11 +470,15 @@ Change: ${modeList}` };
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const action = parts[0]?.toLowerCase();
       const game = parts[1]?.toLowerCase() as RefreshableGame | undefined;
-      const games = new Set(["quiz", "brandquiz", "trivia", "fastfinger", "wordle", "anagram", "hangman"]);
+      const games = new Set(REFRESHABLE_GAMES);
       if (action === "add") {
         if (!game || !games.has(game)) return { response: "Usage: *!refreshgames add <game> [N]*" };
         const count = parts[2] ? Number.parseInt(parts[2], 10) : 20;
         return { response: await refreshGamesAdd(msg.groupId, game, Number.isFinite(count) ? count : 20) };
+      }
+      if (action === "all") {
+        const count = parts[1] ? Number.parseInt(parts[1], 10) : 20;
+        return { response: await refreshGamesAll(msg.groupId, Number.isFinite(count) ? count : 20) };
       }
       if (action === "reset") {
         if (!game || !games.has(game)) return { response: "Usage: *!refreshgames reset <game>*" };
@@ -512,7 +518,7 @@ Change: ${modeList}` };
       if (!isOwner) return { response: "Only owner can use !gamecheck da" };
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const game = parts[0]?.toLowerCase() as RefreshableGame | undefined;
-      const games = new Set(["quiz", "brandquiz", "trivia", "fastfinger", "wordle", "anagram", "hangman"]);
+      const games = new Set(REFRESHABLE_GAMES);
       if (!game || !games.has(game)) return { response: "Usage: *!gamecheck <game> [quarantine]*" };
       const result = await runGameCheck(game, parts.includes("quarantine"));
       const sample = result.failures.slice(0, 8).map((f) => `- ${f.key}: ${f.reason}`).join("\n");
