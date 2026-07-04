@@ -172,9 +172,11 @@ let _ttlArchive: ArchiveMap = {}; // TTL games -- memory-only (synced from Supab
 try { _archive = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8")); } catch {}
 
 let structuredGenerator = generateStructured;
+let createGameForStart = createGame;
 
-export function setGameTestHooks(hooks: { generateStructured?: typeof generateStructured }): void {
+export function setGameTestHooks(hooks: { generateStructured?: typeof generateStructured; createGame?: typeof createGame }): void {
   if (hooks.generateStructured) structuredGenerator = hooks.generateStructured;
+  if (hooks.createGame) createGameForStart = hooks.createGame;
 }
 
 function saveArchive(): void {
@@ -328,6 +330,55 @@ function getMostLikelyPool(): MostLikelyItem[] { return filterQuarantined("mostl
 function getStoryTimePool(): StoryItem[] { return filterQuarantined("storytime", [...STORY_STARTERS, ...((loadExtraPools().storytime ?? []) as StoryItem[])]); }
 function getRiddlePool(): RiddleItem[] { return filterQuarantined("riddle", [...RIDDLE_CATEGORIES, ...((loadExtraPools().riddle ?? []) as RiddleItem[])]); }
 function getWyrPool(): WyrItem[] { return filterQuarantined("wyr", [...WYR_THEMES, ...((loadExtraPools().wyr ?? []) as WyrItem[])]); }
+
+type CuratedStringPoolGame = "song" | "dialogue" | "twotruthsonelie" | "mostlikely" | "storytime" | "riddle" | "wyr";
+type CuratedExtraPools = Partial<Record<CuratedStringPoolGame, unknown[]>>;
+type CuratedQuarantineMap = Partial<Record<CuratedStringPoolGame, string[]>>;
+
+function loadCuratedExtraPools(): CuratedExtraPools { return readJsonFile<CuratedExtraPools>(EXTRA_POOL_PATH, {}); }
+function loadCuratedQuarantine(): CuratedQuarantineMap { return readJsonFile<CuratedQuarantineMap>(QUARANTINE_PATH, {}); }
+
+function keyForCuratedItem(type: CuratedStringPoolGame, item: unknown): string {
+  if (type === "dialogue") return String((item as { answer?: string }).answer ?? "").toLowerCase();
+  if (type === "song") return String((item as { answer?: string }).answer ?? "").toLowerCase();
+  if (type === "twotruthsonelie") return String((item as { context?: string }).context ?? "").toLowerCase();
+  if (type === "storytime") return String(item ?? "").toLowerCase().slice(0, 60);
+  return String(item ?? "").toLowerCase();
+}
+
+function filterCuratedQuarantined<T>(type: CuratedStringPoolGame, pool: T[]): T[] {
+  const blocked = new Set((loadCuratedQuarantine()[type] ?? []).map((x) => x.toLowerCase()));
+  if (blocked.size === 0) return pool;
+  return pool.filter((item) => !blocked.has(keyForCuratedItem(type, item)));
+}
+
+function getDialoguePool(): { dialogue: string; answer: string; speaker: string; hint: string }[] {
+  return filterCuratedQuarantined("dialogue", [...CURATED_DIALOGUES, ...((loadCuratedExtraPools().dialogue ?? []) as { dialogue: string; answer: string; speaker: string; hint: string }[])]);
+}
+
+function getSongPool(): { lines: string[]; answer: string; movie: string; hint: string }[] {
+  return filterCuratedQuarantined("song", [...SONG_QUIZ, ...((loadCuratedExtraPools().song ?? []) as { lines: string[]; answer: string; movie: string; hint: string }[])]);
+}
+
+function getTwoTruthsPool(): TwoTruthsEntry[] {
+  return filterCuratedQuarantined("twotruthsonelie", [...TWO_TRUTHS_ONE_LIE, ...((loadCuratedExtraPools().twotruthsonelie ?? []) as TwoTruthsEntry[])]);
+}
+
+function getMostLikelyPool(): string[] {
+  return filterCuratedQuarantined("mostlikely", [...MOSTLIKELY_SCENARIOS, ...((loadCuratedExtraPools().mostlikely ?? []) as string[])]);
+}
+
+function getStoryTimePool(): string[] {
+  return filterCuratedQuarantined("storytime", [...STORY_STARTERS, ...((loadCuratedExtraPools().storytime ?? []) as string[])]);
+}
+
+function getRiddlePool(): string[] {
+  return filterCuratedQuarantined("riddle", [...RIDDLE_CATEGORIES, ...((loadCuratedExtraPools().riddle ?? []) as string[])]);
+}
+
+function getWyrPool(): string[] {
+  return filterCuratedQuarantined("wyr", [...WYR_THEMES, ...((loadCuratedExtraPools().wyr ?? []) as string[])]);
+}
 
 function getPoolKeys(type: FinitePoolGame): string[] {
   switch (type) {
@@ -1260,19 +1311,19 @@ const CURATED_DIALOGUES: { dialogue: string; answer: string; speaker: string; hi
 ];
 
 // ===== DIALOGUE — Guess Tamil Movie from Famous Dialogue =====
-async function startDialogue(msg: BotMessage): Promise<string> {
+export async function startDialogue(msg: BotMessage): Promise<string> {
   const archived = getArchived(msg.groupId, "dialogue");
-  const pool = CURATED_DIALOGUES.filter(d => !archived.includes(d.answer.toLowerCase()));
+  let pool = getDialoguePool().filter(d => !archived.includes(d.answer.toLowerCase()));
 
   if (pool.length === 0) {
     resetArchive(msg.groupId, "dialogue");
-    return "Dialogue pool reset aayiduchu! Ippovum pazhaya questions varum — try pannunga!";
+    pool = getDialoguePool();
   }
 
   const entry = randPick(pool);
   archiveAnswer(msg.groupId, "dialogue", entry.answer.toLowerCase());
 
-  await createGame(msg.groupId, "dialogue", {
+  await createGameForStart(msg.groupId, "dialogue", {
     dialogue: entry.dialogue,
     answer: entry.answer.toLowerCase(),
     speaker: entry.speaker,
@@ -1328,10 +1379,10 @@ HINT: <hint about the song mood or movie — not the missing word>`;
 }
 
 // ===== WOULD YOU RATHER =====
-async function startWYR(msg: BotMessage): Promise<string> {
+export async function startWYR(msg: BotMessage): Promise<string> {
   const archivedWYR = getArchived(msg.groupId, "wyr");
-  let wyr_pool = WYR_THEMES.filter(t => !archivedWYR.includes(t.toLowerCase()));
-  if (wyr_pool.length === 0) { resetArchive(msg.groupId, "wyr"); wyr_pool = WYR_THEMES; }
+  let wyr_pool = getWyrPool().filter(t => !archivedWYR.includes(t.toLowerCase()));
+  if (wyr_pool.length === 0) { resetArchive(msg.groupId, "wyr"); wyr_pool = getWyrPool(); }
   const theme = randPick(wyr_pool)!;
   const prompt = `Generate ONE funny "Would You Rather" question themed around: ${theme}. Both options should be equally painful/funny. Write in Tanglish.
 
@@ -1421,17 +1472,17 @@ async function startTrivia(msg: BotMessage): Promise<string> {
 }
 
 // ===== SONG QUIZ — Guess the Tamil song from English-translated lyrics =====
-async function startSongQuiz(msg: BotMessage): Promise<string> {
+export async function startSongQuiz(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "song");
-  let pool = SONG_QUIZ.filter(q => !archived.includes(q.answer.toLowerCase()));
+  let pool = getSongPool().filter(q => !archived.includes(q.answer.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "song");
-    pool = SONG_QUIZ;
+    pool = getSongPool();
   }
   const song = randPick(pool);
   archiveAnswer(msg.groupId, "song", song.answer);
 
-  await createGame(msg.groupId, "song", {
+  await createGameForStart(msg.groupId, "song", {
     answer: song.answer,
     movie: song.movie,
     hint: song.hint,
@@ -2005,8 +2056,8 @@ const RIDDLE_CATEGORIES = [
 
 async function startRiddle(msg: BotMessage): Promise<string> {
   const archivedRiddle = getArchived(msg.groupId, "riddle");
-  let riddle_pool = RIDDLE_CATEGORIES.filter(c => !archivedRiddle.includes(c.toLowerCase()));
-  if (riddle_pool.length === 0) { resetArchive(msg.groupId, "riddle"); riddle_pool = RIDDLE_CATEGORIES; }
+  let riddle_pool = getRiddlePool().filter(c => !archivedRiddle.includes(c.toLowerCase()));
+  if (riddle_pool.length === 0) { resetArchive(msg.groupId, "riddle"); riddle_pool = getRiddlePool(); }
   const cat = randPick(riddle_pool);
   const content = await generateStructured(
     `Generate a classic Tamil-style riddle about: ${cat}.
@@ -2304,8 +2355,8 @@ const MOSTLIKELY_SCENARIOS = [
 
 async function startMostLikely(msg: BotMessage): Promise<string> {
   const archived = getArchived(msg.groupId, "mostlikely");
-  const pool = MOSTLIKELY_SCENARIOS.filter(s => !archived.includes(s.toLowerCase()));
-  const scenarioPool = pool.length > 0 ? pool : MOSTLIKELY_SCENARIOS; // reset if all used
+  const pool = getMostLikelyPool().filter(s => !archived.includes(s.toLowerCase()));
+  const scenarioPool = pool.length > 0 ? pool : getMostLikelyPool(); // reset if all used
   const scenario = randPick(scenarioPool);
   archiveAnswer(msg.groupId, "mostlikely", scenario.toLowerCase());
   await createGame(msg.groupId, "mostlikely", { scenario, votes: {} as Record<string, string>, ended: false });
@@ -2341,8 +2392,8 @@ const STORY_STARTERS = [
 
 async function startStoryTime(msg: BotMessage): Promise<string> {
   const archivedStory = getArchived(msg.groupId, "storytime");
-  let story_pool = STORY_STARTERS.filter(s => !archivedStory.includes(s.toLowerCase().slice(0, 60)));
-  if (story_pool.length === 0) { resetArchive(msg.groupId, "storytime"); story_pool = STORY_STARTERS; }
+  let story_pool = getStoryTimePool().filter(s => !archivedStory.includes(s.toLowerCase().slice(0, 60)));
+  if (story_pool.length === 0) { resetArchive(msg.groupId, "storytime"); story_pool = getStoryTimePool(); }
   const startLine = randPick(story_pool)!;
   archiveAnswer(msg.groupId, "storytime", startLine.toLowerCase().slice(0, 60));
   await createGame(msg.groupId, "storytime", {
@@ -2724,10 +2775,10 @@ const TWO_TRUTHS_ONE_LIE: TwoTruthsEntry[] = [
 
 async function startTwoTruthsOneLie(msg: BotMessage): Promise<string> {
   let archived = getArchived(msg.groupId, "twotruthsonelie");
-  let pool = TWO_TRUTHS_ONE_LIE.filter((e) => !archived.includes(e.context.toLowerCase()));
+  let pool = getTwoTruthsPool().filter((e) => !archived.includes(e.context.toLowerCase()));
   if (pool.length === 0) {
     resetArchive(msg.groupId, "twotruthsonelie");
-    pool = TWO_TRUTHS_ONE_LIE;
+    pool = getTwoTruthsPool();
   }
   const entry = randPick(pool);
   archiveAnswer(msg.groupId, "twotruthsonelie", entry.context.toLowerCase());

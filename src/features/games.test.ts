@@ -315,3 +315,43 @@ test("gamecheck quarantine: writes failing keys and excludes them from pools", a
   const quarantine = JSON.parse(readFileSync(join(TMP, "pool-quarantine.json"), "utf8"));
   assert.ok(quarantine.fastfinger.includes("bad1"));
 });
+
+test("archive: refreshed string pools are picked by the real start functions", async () => {
+  writeFileSync(join(TMP, "pool-extra.json"), JSON.stringify({
+    dialogue: [{
+      dialogue: "REFRESHED DIALOGUE LINE",
+      answer: "fresh dialogue answer",
+      speaker: "Fresh Speaker",
+      hint: "fresh dialogue hint",
+    }],
+    song: [{
+      lines: ["REFRESHED SONG LINE", "SECOND REFRESHED LINE"],
+      answer: "fresh song answer",
+      movie: "Fresh Movie",
+      hint: "fresh song hint",
+    }],
+  }));
+
+  const oldRandom = Math.random;
+  Math.random = () => 0.999999;
+  g.setGameTestHooks({ createGame: async () => null as never });
+  try {
+    const msg = {
+      groupId: "g-refresh-start",
+      from: "15550000000@s.whatsapp.net",
+      senderName: "Tester",
+      text: "",
+    } as never;
+
+    const dialogue = await g.startDialogue(msg);
+    assert.match(dialogue, /REFRESHED DIALOGUE LINE/);
+    assert.ok(g.getArchived("g-refresh-start", "dialogue").includes("fresh dialogue answer"));
+
+    const song = await g.startSongQuiz(msg);
+    assert.match(song, /REFRESHED SONG LINE/);
+    assert.ok(g.getArchived("g-refresh-start", "song").includes("fresh song answer"));
+  } finally {
+    g.setGameTestHooks({ createGame: g.createGame });
+    Math.random = oldRandom;
+  }
+});
