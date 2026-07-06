@@ -658,7 +658,7 @@ Change: ${modeList}` };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *LED strip*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n📺 !led tv on / off — sync strip to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
+        return { response: "💡 *Lights (LED strip + Wipro bulb)*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> (0 = dark, stays connected) · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n📺 !led tv on / off — sync strip + Wipro bulb to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
       }
       try {
         const ctrl = new AbortController();
