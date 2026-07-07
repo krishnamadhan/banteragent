@@ -133,6 +133,17 @@ async function handlePiCommand(
       break;
     }
 
+    case "drift": {
+      // Docs-freshness + board↔repo sync checks (weekly cron writes ~/reports/;
+      // this runs them on demand).
+      const [docs, sync] = await Promise.all([
+        runSafe("python3 /home/pi/scripts/check_docs_drift.py --all", 30000),
+        runSafe("python3 /home/pi/scripts/check_board_sync.py", 30000),
+      ]);
+      reply = `🧹 *Drift check*\n\n📄 Docs vs disk:\n${docs || "no output"}\n\n📋 Board ↔ repos:\n${sync || "no output"}`;
+      break;
+    }
+
     // ── Cosmo + LED status ───────────────────────────────────────────────────
     case "led": {
       const health = await runSafe("curl -s -m5 http://127.0.0.1:8000/health", 8000);
@@ -347,7 +358,7 @@ async function handlePiCommand(
     }
 
     case "help":
-      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n🔍 !pi selfcheck — Deep validation (services/backups/watchdog/cosmo/LED)\n!pi status — Full system report\n🤖 !pi led — Cosmo API + LED strip health\n!pi cosmo [n] — Last N Cosmo reactions\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n\n*LED strip + Wipro bulb (TV Ambilight)*\n!led tv on / off — Sync strip + Wipro bulb to TV colours\n!led calibrate — Detect TV boundary (show a full-red screen first)\n!led status — Connection, sync mode, calibration, write health\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led 255 0 128 — Custom RGB\n!led bright <0-100> — Brightness (0 = dark, stays connected)\n!led on / off — Soft power\n!led movie|chill|night|focus|reading|romance|party — Scene presets\n\n*Cosmo (robot)*\n!cosmo — Camera live feed link (also: !cosmo live)\n!cosmo snap — Camera photo · !cosmo record [s] — Video clip\n!cosmo status / caps / mood / last / log — Brain state\n!cosmo say <text> — Speak via TTS · !cosmo sim <event> — Inject event\n!cosmo test — Fire demo events · !cosmo move fwd|back|left|right|stop\n!cosmo home <event> — Smart-home event · !cosmo health — Full dump\n!cosmo mem — RAM usage · !cosmo start / stop — PM2 control\n\n*Games admin (owner)*\n!refreshgames — Archive stats · add <game> [N] · all [N] · reset\n!gamestats — Game archive stats · !gamecheck — Pool integrity check\n\n*Danger Zone*\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
+      reply = `*Pi Admin Commands*\n━━━━━━━━━━━━━━━━━━━\n💚 !pi health — One-shot traffic-light check (START HERE)\n🔍 !pi selfcheck — Deep validation (services/backups/watchdog/cosmo/LED)\n🧹 !pi drift — Docs-freshness + board↔repo sync check\n!pi status — Full system report\n🤖 !pi led — Cosmo API + LED strip health\n!pi cosmo [n] — Last N Cosmo reactions\n!pi backup [now] — Nightly backup status / trigger\n!pi top — Top processes by RAM\n!pi temp / battery / disk / network / uptime\n!pi logs [n] — Last N log lines\n!pi errors — Recent error logs\n\n*LED strip + Wipro bulb (TV Ambilight)*\n!led tv on / off — Sync strip + Wipro bulb to TV colours\n!led calibrate — Detect TV boundary (show a full-red screen first)\n!led status — Connection, sync mode, calibration, write health\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led 255 0 128 — Custom RGB\n!led bright <0-100> — Brightness (0 = dark, stays connected)\n!led on / off — Soft power\n!led movie|chill|night|focus|reading|romance|party — Scene presets\n\n*Cosmo (robot)*\n!cosmo — Camera live feed link (also: !cosmo live)\n!cosmo snap — Camera photo · !cosmo record [s] — Video clip\n!cosmo status / caps / mood / last / log — Brain state\n!cosmo say <text> — Speak via TTS · !cosmo sim <event> — Inject event\n!cosmo test — Fire demo events · !cosmo move fwd|back|left|right|stop\n!cosmo home <event> — Smart-home event · !cosmo health — Full dump\n!cosmo mem — RAM usage · !cosmo start / stop — PM2 control\n\n*Games admin (owner)*\n!refreshgames — Archive stats · add <game> [N] · all [N] · reset\n!gamestats — Game archive stats · !gamecheck — Pool integrity check\n\n*Danger Zone*\n!pi restart bot — Restart BanterAgent (asks confirm)\n!pi restart pi — Reboot Pi (asks confirm)\n!pi update bot — Git pull + build (restart on confirm)\n!pi clean — Safe cleanup (logs + cache)`;
       break;
 
     default:
