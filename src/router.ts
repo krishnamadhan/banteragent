@@ -654,11 +654,21 @@ Change: ${modeList}` };
       let body: { cmd: string; value?: any } | null = null;
       if (sub === "off" || sub === "on") body = { cmd: sub };
       else if (sub === "bright" || sub === "brightness") body = { cmd: "bright", value: parseInt(a[1] || "100") };
+      else if (sub === "pattern") {
+        if (!a[1]) return { response: "🌈 *Patterns* (controller-side, zero BLE traffic)\n!led pattern rainbow|dreaming|rgb|trail|stream|curtain|spot|flutter|hop|strobe|gradual|race|run|swab|off\nor a raw index 0-210: !led pattern 42" };
+        body = { cmd: "pattern", value: /^\d+$/.test(a[1]) ? parseInt(a[1]) : a[1] };
+      }
+      else if (sub === "music" || sub === "sound") {
+        // built-in mic on the strip controller — reacts to room audio
+        const eq = a[1] || "classic";
+        body = { cmd: "music", value: /^\d+$/.test(eq) ? parseInt(eq) : eq };
+      }
+      else if (sub === "temp" || sub === "temperature") body = { cmd: "temp", value: parseInt(a[1] || "50") };
       else if (/^\d+ \d+ \d+$/.test(a.join(" "))) body = { cmd: "color", value: [ +a[0], +a[1], +a[2] ] };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *Lights (LED strip + Wipro bulb)*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> (0 = dark, stays connected) · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n📺 !led tv on / off — sync strip + Wipro bulb to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
+        return { response: "💡 *Lights (LED strip + Wipro bulb)*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> (0 = dark, stays connected) · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n🌈 !led pattern [name|0-210] — built-in animations (bare = list)\n🎵 !led music [classic|soft|dynamic|disco|off] — strip's own mic sound-sync\n🌡️ !led temp <0-100> — white colour temperature (0 warm → 100 cool)\n📺 !led tv on / off — sync strip + Wipro bulb to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
       }
       try {
         const ctrl = new AbortController();
