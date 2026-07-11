@@ -182,6 +182,7 @@ const OWNER_SECTIONS: HelpSection[] = [
       "  !gamecheck <game> [quarantine] — Pool integrity check",
       "  !approve / !reject — Pending fix workflow",
       "  !led <colour|off|on|bright|tv|calibrate|scene|status> — LED strip + Wipro bulb",
+      "  !led bulb <colour|R G B|bright N|on|off> — Wipro bulb only",
       "  !cosmo ... — Robot live/feed/status tools",
       "  !pi / !pi help — Pi monitor/admin command tree",
     ],

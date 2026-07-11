@@ -63,6 +63,49 @@ function parseCommand(text: string): { command: string; args: string } {
 
 const _refreshConfirmPending = new Map<string, number>(); // groupId => ts
 
+const LED_COLORS: Record<string, [number, number, number]> = {
+  red: [255, 0, 0],
+  green: [0, 255, 0],
+  blue: [0, 0, 255],
+  white: [255, 255, 255],
+  warm: [255, 160, 60],
+  yellow: [255, 255, 0],
+  orange: [255, 90, 0],
+  purple: [150, 0, 255],
+  pink: [255, 40, 120],
+  cyan: [0, 255, 255],
+  amber: [255, 120, 0],
+};
+
+const LED_BULB_USAGE = "💡 *Bulb only*\n!led bulb <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led bulb 255 0 128\n!led bulb bright <0-100>\n!led bulb on / off";
+
+function parseByte(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const n = Number.parseInt(value, 10);
+  return n >= 0 && n <= 255 ? n : null;
+}
+
+function parsePercent(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const n = Number.parseInt(value, 10);
+  return n >= 0 && n <= 100 ? n : null;
+}
+
+function parseLedBulbBody(args: string[]): { cmd: string; value?: any; bright?: number } | null {
+  const sub = args[0] || "";
+  if (sub === "on" || sub === "off") return { cmd: sub };
+  if (sub === "bright" || sub === "brightness") {
+    const pct = parsePercent(args[1]);
+    return pct === null ? null : { cmd: "bright", value: pct };
+  }
+  const rgb = [parseByte(args[0]), parseByte(args[1]), parseByte(args[2])];
+  if (rgb.every((n): n is number => n !== null) && args.length === 3) {
+    return { cmd: "color", value: rgb };
+  }
+  const named = LED_COLORS[sub];
+  return named ? { cmd: "color", value: named } : null;
+}
+
 export async function routeMessage(msg: BotMessage, recentMessages: string[] = []): Promise<CommandResult> {
   const { command, args } = parseCommand(msg.text);
 
@@ -475,6 +518,30 @@ Change: ${modeList}` };
       const a = args.trim().toLowerCase().split(/\s+/);
       const sub = a[0] || "";
 
+      // Manual Wipro bulb control — explicit bulb-only target.
+      if (sub === "bulb") {
+        const bulbArgs = a.slice(1).filter(Boolean);
+        const body = parseLedBulbBody(bulbArgs);
+        if (!body) return { response: LED_BULB_USAGE };
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 8000);
+          const r = await fetch(`http://127.0.0.1:8000/led/bulb`, {
+            method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal,
+          });
+          clearTimeout(t);
+          const j: any = await r.json().catch(() => ({}));
+          if (r.ok) {
+            const state = j.on === false ? "off" : "on";
+            const manual = j.last_manual ? ` · ${JSON.stringify(j.last_manual)}` : "";
+            return { response: `💡 Bulb done — ${state}${manual}` };
+          }
+          return { response: `💡 Bulb ${j.error || `failed (${r.status})`}` };
+        } catch {
+          return { response: "💡 Couldn't reach Cosmo bulb API (:8000)." };
+        }
+      }
+
       // Calibrate the TV zone — user shows a full-red screen, we find the TV rectangle
       if (sub === "calibrate" || sub === "cal") {
         try {
@@ -554,7 +621,11 @@ Change: ${modeList}` };
           const sync = st.tv_sync ? "📺 TV sync ON" : "manual";
           const scene = st.scene ? ` · scene: ${st.scene}` : "";
           const cal = st.roi_active ? "✅" : "❌ not calibrated";
-          return { response: `💡 *LED strip*\n${conn} · ${st.on ? "on" : "off"} @ ${st.brightness}%${scene}\nmode: ${sync}\ncalibrated: ${cal}\nwrites: ${he.writes_ok} ok / ${he.writes_fail} fail${he.last_error ? `\nlast error: ${he.last_error}` : ""}` };
+          const bulb = he.bulb;
+          const bulbLine = bulb
+            ? `\n\n💡 *Wipro bulb*\n${bulb.enabled ? "✅ enabled" : "🚨 disabled"} · ${bulb.on ? "on" : "off"}\nwrites: ${bulb.ok ?? 0} ok / ${bulb.fail ?? 0} fail${bulb.music ? "\nmode: music/sync" : ""}${bulb.last_manual ? `\nlast manual: ${JSON.stringify(bulb.last_manual)}` : ""}`
+            : "";
+          return { response: `💡 *LED strip*\n${conn} · ${st.on ? "on" : "off"} @ ${st.brightness}%${scene}\nmode: ${sync}\ncalibrated: ${cal}\nwrites: ${he.writes_ok} ok / ${he.writes_fail} fail${he.last_error ? `\nlast error: ${he.last_error}` : ""}${bulbLine}` };
         } catch {
           return { response: "💡 Couldn't reach Cosmo (:8000)." };
         }
@@ -577,7 +648,7 @@ Change: ${modeList}` };
       else if (sub) body = { cmd: "named", value: sub };
 
       if (!body) {
-        return { response: "💡 *Lights (LED strip + Wipro bulb)*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> (0 = dark, stays connected) · !led 255 0 128\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n🌈 !led pattern [name|0-210] — built-in animations (bare = list)\n🎵 !led music [classic|soft|dynamic|disco|off] — strip's own mic sound-sync\n🌡️ !led temp <0-100> — white colour temperature (0 warm → 100 cool)\n📺 !led tv on / off — sync strip + Wipro bulb to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
+        return { response: "💡 *Lights (LED strip + Wipro bulb)*\n!led <colour> — red green blue white warm yellow orange purple pink cyan amber\n!led off / on · !led bright <0-100> (0 = dark, stays connected) · !led 255 0 128\n!led bulb <colour|R G B|bright N|on|off> — Wipro bulb only\n🎬 !led movie|chill|night|focus|reading|romance|party — scenes\n🌈 !led pattern [name|0-210] — built-in animations (bare = list)\n🎵 !led music [classic|soft|dynamic|disco|off] — strip's own mic sound-sync\n🌡️ !led temp <0-100> — white colour temperature (0 warm → 100 cool)\n📺 !led tv on / off — sync strip + Wipro bulb to the TV\n🎯 !led calibrate — detect TV boundary (show full red screen)\nℹ️ !led status — connection + health" };
       }
       try {
         const ctrl = new AbortController();
