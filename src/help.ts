@@ -216,6 +216,7 @@ export function renderPiHelp(): string {
       heading: "💾 *Backups / system:*",
       lines: [
         "  !pi backup [now] — Nightly backup status / trigger",
+        "  !pi cost [days] — AI token spend estimate",
         "  !pi top — Top processes by RAM",
         "  !pi temp / battery / disk / network / uptime",
         "  !pi logs [n] — Last N log lines",

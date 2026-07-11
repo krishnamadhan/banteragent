@@ -394,6 +394,8 @@ async function taskPiHealthReport(groupId: string) {
   const ba    = pm2["banteragent"] ?? {};
   const tempOk = s.cpu_temp === null || s.cpu_temp < 65;
   const allGood = tempOk && s.ram_percent < 80 && s.disk_percent < 80 && s.internet_ok && ba.status === "online";
+  const { renderAiSpendSection } = await import("./pi-admin.js");
+  const aiSpend = await renderAiSpendSection(1, 1);
 
   const lines = [
     `*Daily Pi Report — ${d}*`,
@@ -405,6 +407,8 @@ async function taskPiHealthReport(groupId: string) {
     `Net:     ${s.internet_ok ? "Online ✅" : "DOWN 🚨"}`,
     `Uptime:  ${Math.floor(s.uptime_secs / 86400)}d ${Math.floor((s.uptime_secs % 86400) / 3600)}h`,
     `Bot:     ${ba.status === "online" ? "Online ✅" : "DOWN 🚨"} (${ba.restarts ?? 0} restarts)`,
+    "",
+    aiSpend,
     "",
     allGood ? "All systems healthy 🟢" : "⚠️ Check metrics above",
   ];

@@ -198,8 +198,10 @@ export async function getChatResponse(
     });
     monClaude({
       type: "chat",
+      model: MODEL,
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
       cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
       dur_ms: Date.now() - t0,
     });
@@ -225,7 +227,15 @@ export async function generateStructured(prompt: string): Promise<string> {
       ? response.content[0].text
       : "Content generate panna mudiyala machaan.";
     devlog({ type: "structured", prompt, response: text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, durationMs: Date.now() - t0 });
-    monClaude({ type: "structured", input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens, cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0, dur_ms: Date.now() - t0 });
+    monClaude({
+      type: "structured",
+      model: HAIKU_MODEL,
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
+    });
     return text;
   } catch (error) {
     devlog({ type: "structured", prompt, error: String(error), durationMs: Date.now() - t0 });
@@ -247,7 +257,15 @@ export async function generateContent(prompt: string): Promise<string> {
       ? truncateForWhatsApp(response.content[0].text)
       : "Content generate panna mudiyala machaan.";
     devlog({ type: "content", prompt, response: text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, durationMs: Date.now() - t0 });
-    monClaude({ type: "content", input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens, cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0, dur_ms: Date.now() - t0 });
+    monClaude({
+      type: "content",
+      model: HAIKU_MODEL,
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
+    });
     return text;
   } catch (error) {
     devlog({ type: "content", prompt, error: String(error), durationMs: Date.now() - t0 });
@@ -289,6 +307,7 @@ If no: reply EXACTLY: __SILENT__
 
 Silence is your superpower — a rare perfect interjection is worth 10 mid ones.`;
 
+  const t0 = Date.now();
   try {
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("shouldAutoRespond timeout")), 8000)
@@ -307,6 +326,15 @@ Silence is your superpower — a rare perfect interjection is worth 10 mid ones.
     const silent = text.includes("__SILENT__");
     const result = silent ? null : truncateForWhatsApp(text);
     devlog({ type: "auto", sender: senderName, mode, silent, recentMessages, response: result ?? undefined });
+    monClaude({
+      type: "auto",
+      model: HAIKU_MODEL,
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
+    });
     return result;
   } catch {
     return null;
@@ -367,8 +395,10 @@ export async function getImageResponse(
         : "Image pakuren machaan, aana en brain freeze aagiduchu.";
     monClaude({
       type: "image",
+      model: MODEL,
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
       cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
       dur_ms: Date.now() - t0,
     });
@@ -408,6 +438,7 @@ Analyze this WhatsApp sticker. Reply with JSON only (no markdown):
     },
   ];
 
+  const t0 = Date.now();
   try {
     const response = await client.messages.create({
       model: HAIKU_MODEL,
@@ -416,6 +447,15 @@ Analyze this WhatsApp sticker. Reply with JSON only (no markdown):
       messages: [{ role: "user", content: userContent }],
     });
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
+    monClaude({
+      type: "sticker_vision",
+      model: HAIKU_MODEL,
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
+    });
     const parsed = JSON.parse(raw.replace(/^```json\n?|```$/g, "").trim());
     return {
       description: parsed.description ?? "expressive sticker",
@@ -456,6 +496,7 @@ ${stickerList}
 Pick the sticker whose emotion or vibe BEST matches the bot's response. Only pick one if it's a really strong match — not every message needs a sticker.
 Reply with JSON only: {"id": "<sticker_id>"} or {"id": null} if none fits.`;
 
+  const t0 = Date.now();
   try {
     const response = await client.messages.create({
       model: HAIKU_MODEL,
@@ -464,6 +505,15 @@ Reply with JSON only: {"id": "<sticker_id>"} or {"id": null} if none fits.`;
       messages: [{ role: "user", content: prompt }],
     });
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
+    monClaude({
+      type: "sticker_pick",
+      model: HAIKU_MODEL,
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_tokens: (response.usage as any).cache_creation_input_tokens ?? 0,
+      cache_read_tokens: (response.usage as any).cache_read_input_tokens ?? 0,
+      dur_ms: Date.now() - t0,
+    });
     const parsed = JSON.parse(raw.replace(/^```json\n?|```$/g, "").trim());
     return normalizeStickerChoice(parsed.id, stickers, candidateIds);
   } catch {
