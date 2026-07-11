@@ -49,6 +49,7 @@ import {
   handleBalance as handleConstructionBalance, handleHistory as handleConstructionHistory,
   handleReport, constructionHelp,
 } from "./features/construction/index.js";
+import { renderMainHelp } from "./help.js";
 
 function parseCommand(text: string): { command: string; args: string } {
   if (!text.startsWith("!")) return { command: "chat", args: text };
@@ -131,103 +132,7 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
     case "h":   // short alias for !help
     case "help":
       return {
-        response: `🤖 *TanglishBot Commands*
-
-💬 *Chat:* dei claude <message>
-🎮 *Games:*
-  !quiz — Tamil movie emoji quiz
-  !trivia — Tamil Nadu trivia
-  !brandquiz — Guess the Indian brand
-  !fastfinger (!ff) — First to type the word wins
-  !wordle — 🆕 Squad Wordle (5-letter, crack it together)
-  !w <word> — Wordle guess
-  !anagram — 🆕 Unscramble, first correct wins
-  !hangman — 🆕 Co-op letter guessing
-  !detective — 🕵️ Solve the petty crime
-  !battle / !top10 — VS battle / blind ranking (group vote)
-  !a — Answer the active game
-  !score [alltime] — Leaderboard
-
-🏏 *Cricket:*
-  !cricket — Live scores
-  !cricket alerts on/off
-
-📊 *Polls:*
-  !poll <question>
-  !vote <number>
-
-🏆 *Analytics:*
-  !stats — Group stats
-  !awards — Funny awards
-  !top — Most active
-  !lurkers — Expose lurkers
-
-⏰ *Reminders:*
-  !remind me <task> at <time>
-  !remind group <task> at <time>
-  !reminders — List reminders
-
-👤 *Profile:*
-  !myinfo nick Machan
-  !myinfo gender male
-  !myinfo zodiac scorpio
-  !myinfo birthday July 15
-  !myinfo job software engineer
-  !myinfo partner Priya
-  !myinfo show
-
-🎉 *Fun:*
-  !roast <name> — Savage roast
-  !roastbattle (!rb) PersonA vs PersonB — Epic roast battle
-  !roastmetaai — Mock that useless Meta AI
-  !praise <name> — Hype someone up
-  !ship Name1 Name2 — Love compatibility
-  !dare — Get a dare
-  !debate — Hot take to spark argument
-  !gossip — Fake group gossip
-  !movie [mood/name] — Movie rec or info card
-  !trailer <movie> — Movie trailer reaction
-  !rank <topic> — Opinionated rankings for debate
-  !imagine <scenario> — AI scenario generator
-  !character <movie> — Assign movie characters to members
-  !astro Rasi1 Rasi2 — Tamil rasi compatibility
-  !dialect [region] <text> — Regional dialect translator
-  !translate <text> — Tamil ↔ English
-  !recipe <dish or ingredients> — Tamil recipe
-  !vibecheck — Group mood analysis
-  !summary (!summarize / !catchup) — Catchup on missed messages
-
-🎲 *Instant:*
-  !toss [heads/tails] — Coin flip
-  !split <amount> <people> — Bill splitter
-  !8ball <question> — Magic 8 ball
-  !countdown (list / create <name> YYYY-MM-DD) — Event countdown
-
-💬 *Quotes:*
-  !quoteme <name> said "<quote>" — Save a group quote
-  !quote [name] — Random saved quote
-  !quoteboard — Most quoted members
-
-📰 *News:*
-  !news — Hot news digest (cricket, movies, India)
-  !news ipl — IPL updates only
-  !news cricket — Cricket only
-  !news movies — Kollywood & entertainment
-  !news tech — Technology
-  !news india — India headlines
-
-💪 *Fitness:*
-  !pushup — How to submit a pushup video
-  !fitboard — Weekly fitness leaderboard
-
-⚙️ *Settings:*
-  !mode roast / nanban / peter / paati 👵
-  !mute — Mute bot for 1 hour
-  !unmute — Resume bot
-
-🐛 *Feedback:*
-  !bug <description> — Report a bug or issue
-  !refreshgames — View archive stats / add / all / reset (owner only)\n!gamestats — View game archive stats`,
+        response: renderMainHelp(samePhone(msg.from, process.env.BOT_OWNER_PHONE)),
       };
 
     // Games
@@ -447,6 +352,8 @@ Change: ${modeList}` };
 
     // Bug approve/reject
     case "approve": {
+      const ownerPhone = process.env.BOT_OWNER_PHONE;
+      if (!samePhone(msg.from, ownerPhone)) return { response: "" };
       const pendingPath = "/home/pi/banteragent/pending-fix.md";
       const { existsSync } = await import("fs");
       if (!existsSync(pendingPath)) return { response: "No pending fix to approve da 🤷" };
@@ -454,6 +361,8 @@ Change: ${modeList}` };
       return { response: "✅ Fix approved! Applying now — bot will restart in ~30s..." };
     }
     case "reject": {
+      const ownerPhone = process.env.BOT_OWNER_PHONE;
+      if (!samePhone(msg.from, ownerPhone)) return { response: "" };
       const { unlinkSync, existsSync: exists2 } = await import("fs");
       if (!exists2("/home/pi/banteragent/pending-fix.md")) return { response: "No pending fix da 🤷" };
       unlinkSync("/home/pi/banteragent/pending-fix.md");
