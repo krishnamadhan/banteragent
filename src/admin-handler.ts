@@ -296,6 +296,7 @@ ${task}`;
 !fixbugs — manually trigger bug fixer
 !temp — CPU temperature
 !ps — top processes by CPU
+!led bulb <colour|R G B|bright N|on|off> — Wipro bulb only
 !led calibrate — calibrate TV boundary from full red screen
 !led tv on|off — TV Ambilight sync
 !reboot — reboot Pi
