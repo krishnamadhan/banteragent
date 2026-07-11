@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { samePhone } from "./phone.js";
 import { renderPiHelp } from "./help.js";
+import { getClaudeUsageSummary } from "./monitor.js";
 
 const execAsync = promisify(exec);
 const STATUS_FILE = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
@@ -49,6 +50,34 @@ function fmtPct(pct: number, warnAt = 80, critAt = 90): string {
   return `${pct}% ${icon}`;
 }
 
+function fmtTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  return String(tokens);
+}
+
+function fmtMoney(usd: number): string {
+  const usdInr = Number.parseFloat(process.env.AI_SPEND_USD_INR ?? "92.3");
+  const inr = usd * (Number.isFinite(usdInr) ? usdInr : 92.3);
+  return `$${usd.toFixed(4)} / ₹${inr.toFixed(2)}`;
+}
+
+function istDate(offsetDays = 0): string {
+  const d = Date.now() + 5.5 * 60 * 60 * 1000 - offsetDays * 86400_000;
+  return new Date(d).toISOString().slice(0, 10);
+}
+
+function dateWindow(days: number, endOffsetDays: number): string[] {
+  const n = Math.max(1, Math.min(Math.trunc(days) || 1, 30));
+  return Array.from({ length: n }, (_, i) => istDate(endOffsetDays + n - 1 - i));
+}
+
+function estimateCosmoCostUsd(tokens: number): number {
+  // Cosmo's TokenBudget stores total tokens only. Its default Claude backend is Haiku 4.5;
+  // estimate a rough 80% input / 20% output split at $1/$5 per MTok.
+  return +((tokens / 1_000_000) * 1.8).toFixed(6);
+}
+
 async function runSafe(cmd: string, timeoutMs = 30000): Promise<string> {
   try {
     const { stdout } = await execAsync(cmd, { timeout: timeoutMs });
@@ -56,6 +85,53 @@ async function runSafe(cmd: string, timeoutMs = 30000): Promise<string> {
   } catch (e: any) {
     return e.message?.slice(0, 200) ?? "error";
   }
+}
+
+async function readCosmoBudgetDays(days: number, endOffsetDays: number): Promise<Array<{ date: string; tokens: number }>> {
+  const dates = dateWindow(days, endOffsetDays);
+  const script = `
+import json, pathlib, sqlite3
+dates = ${JSON.stringify(dates)}
+out = {d: 0 for d in dates}
+db = pathlib.Path("/home/pi/.robot/memory/episodic.db")
+if db.exists():
+    conn = sqlite3.connect(str(db))
+    try:
+        for key, value in conn.execute("SELECT key, value FROM memory_meta WHERE key LIKE 'token_budget:%'"):
+            date = key.split(":", 1)[1]
+            if date in out:
+                try:
+                    out[date] = int(value)
+                except Exception:
+                    out[date] = 0
+    finally:
+        conn.close()
+print(json.dumps([{"date": d, "tokens": out[d]} for d in dates]))
+`.trim();
+  const raw = await runSafe(`python3 -c ${JSON.stringify(script)}`, 8000);
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return dates.map((date) => ({ date, tokens: 0 }));
+}
+
+export async function renderAiSpendSection(days = 1, endOffsetDays = 0): Promise<string> {
+  const ba = getClaudeUsageSummary(days, endOffsetDays);
+  const cosmoDays = await readCosmoBudgetDays(days, endOffsetDays);
+  const cosmoTokens = cosmoDays.reduce((sum, row) => sum + row.tokens, 0);
+  const cosmoUsd = estimateCosmoCostUsd(cosmoTokens);
+  const totalUsd = ba.total.cost_usd + cosmoUsd;
+  const label = days === 1
+    ? (endOffsetDays === 1 ? `yesterday (${ba.total.date})` : `today (${ba.total.date})`)
+    : `${days}d (${ba.total.date})`;
+
+  return [
+    `💸 *AI spend — ${label}*`,
+    `BanterAgent: ${fmtTokens(ba.total.input_tokens + ba.total.output_tokens)} tok · ${ba.total.calls} calls · ${fmtMoney(ba.total.cost_usd)}`,
+    `Cosmo: ${fmtTokens(cosmoTokens)} tok · rough ${fmtMoney(cosmoUsd)}`,
+    `Total: ${fmtMoney(totalUsd)}`,
+  ].join("\n");
 }
 
 async function handlePiCommand(
@@ -73,10 +149,11 @@ async function handlePiCommand(
     case "check":
     case "checks": {
       const s = readStatus();
-      const [pm2Out, backupOut, errTail] = await Promise.all([
+      const [pm2Out, backupOut, errTail, aiSpend] = await Promise.all([
         runSafe("pm2 jlist"),
         runSafe("ls -t /home/pi/backups/nightly/*.tar.gz 2>/dev/null | head -3 | xargs -r ls -lh --time-style=+%Y-%m-%d | awk '{print $6, $5, $7}'"),
         runSafe(`tail -50 "${ERR_FILE}" 2>/dev/null | grep -ci "error" || true`),
+        renderAiSpendSection(1, 0),
       ]);
 
       // PM2 all apps
@@ -110,7 +187,13 @@ async function handlePiCommand(
       const verdict = pm2Bad === 0 && (s?.internet_ok ?? false) && !backupLine.startsWith("🚨")
         ? "💚 *ALL SYSTEMS GO*" : "🔴 *ATTENTION NEEDED*";
 
-      reply = `${verdict}\n━━━━━━━━━━━━━━━━━━━\n🌡 ${temp}  💾 RAM ${ram}  💿 Disk ${disk}  📡 ${net}\n\n*PM2 (${pm2Bad === 0 ? "all online" : pm2Bad + " DOWN"})*\n${pm2Lines}\n\n*Nightly backup:* ${backupLine}\n*Bot errors:* ${errLine}\n\n_Deep dive: !pi status · !pi errors · !pi backup_`;
+      reply = `${verdict}\n━━━━━━━━━━━━━━━━━━━\n🌡 ${temp}  💾 RAM ${ram}  💿 Disk ${disk}  📡 ${net}\n\n*PM2 (${pm2Bad === 0 ? "all online" : pm2Bad + " DOWN"})*\n${pm2Lines}\n\n*Nightly backup:* ${backupLine}\n*Bot errors:* ${errLine}\n\n${aiSpend}\n\n_Deep dive: !pi status · !pi errors · !pi backup · !pi cost_`;
+      break;
+    }
+
+    case "cost": {
+      const days = Math.max(1, Math.min(parseInt(args[0] ?? "1", 10) || 1, 30));
+      reply = await renderAiSpendSection(days, 0);
       break;
     }
 
