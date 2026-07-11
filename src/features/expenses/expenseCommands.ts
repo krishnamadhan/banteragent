@@ -310,7 +310,7 @@ export function expensesHelp(): string {
 • \`!history [n]\` — last N entries
 
 *Analysis*
-• \`!analyse\` — process expense.md → save to DB with categories
+• \`!analyse\` / \`!analyze\` — process expense.md → save to DB with categories
 
 *Splitting*
 • \`!split category Food\` — split all Food (last 30 days)
