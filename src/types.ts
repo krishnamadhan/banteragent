@@ -15,4 +15,5 @@ export interface CommandResult {
   additionalMessages?: Array<{ text: string; delayMs?: number }>; // extra messages sent in sequence
   mediaFile?: string;    // absolute path to an image/video to send alongside the response
   mediaCaption?: string; // caption for the media file
+  mediaAsVoice?: boolean; // send audio media as a WhatsApp voice note
 }

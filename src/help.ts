@@ -161,6 +161,7 @@ const PUBLIC_SECTIONS: HelpSection[] = [
     heading: "⚙️ *Settings:*",
     lines: [
       "  !mode roast / nanban / peter / paati",
+      "  !clone — Consent-gated voice clone enrollment/audio replies",
       "  !mute — Mute bot for 1 hour",
       "  !unmute — Resume bot",
     ],

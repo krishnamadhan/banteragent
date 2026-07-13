@@ -9,6 +9,12 @@ import { getGroupSettings } from "./group-settings-cache.js";
 import { extractProfileInfo, getZodiacQuestion } from "./features/profiles.js";
 import { pickMeme, sendMeme } from "./features/memes.js";
 import { samePhone } from "./phone.js";
+import {
+  handleCloneTextMessage,
+  handleCloneVoiceNote,
+  isCloneVoiceNote,
+  sendCloneAudioReplyIfEnabled,
+} from "./features/clone.js";
 import pkg from "whatsapp-web.js";
 const { MessageMedia } = pkg;
 
@@ -54,7 +60,8 @@ export async function handleMessage(client: any, rawMsg: any) {
     text.toLowerCase().startsWith("!pushup");
   const isImage = rawMsg.hasMedia && rawMsg.type === "image";
   const isSticker = rawMsg.hasMedia && rawMsg.type === "sticker";
-  if (!text && !isVideoPushup && !isImage && !isSticker) return;
+  const isCloneAudio = isCloneVoiceNote(rawMsg);
+  if (!text && !isVideoPushup && !isImage && !isSticker && !isCloneAudio) return;
 
   const chat = await rawMsg.getChat();
   const isGroup = chat.isGroup;
@@ -121,6 +128,29 @@ export async function handleMessage(client: any, rawMsg: any) {
   if (isGroup && text.trim().toLowerCase() !== "!unmute") {
     const { muted } = await getGroupSettings(groupId);
     if (muted) return;
+  }
+
+  // ===== VOICE CLONE ENROLLMENT =====
+  if (isCloneAudio) {
+    const cloneReply = await handleCloneVoiceNote(rawMsg, msg).catch((e) => {
+      console.error("[clone] voice-note handler failed:", e);
+      return "Voice enrollment failed safely. Try *!clone enroll* again.";
+    });
+    if (cloneReply) {
+      await rawMsg.reply(cloneReply);
+      return;
+    }
+  }
+
+  if (text && !text.startsWith("!")) {
+    const cloneReply = await handleCloneTextMessage(msg).catch((e) => {
+      console.error("[clone] consent handler failed:", e);
+      return "Voice enrollment failed safely. Try *!clone enroll* again.";
+    });
+    if (cloneReply) {
+      await rawMsg.reply(cloneReply);
+      return;
+    }
   }
 
   // ===== VIDEO PUSHUP INTERCEPTION =====
@@ -281,7 +311,7 @@ export async function handleMessage(client: any, rawMsg: any) {
       await sendReply(client, rawMsg, "Command fail aayiduchu da. Logs-la note panniten, retry pannu.");
       return;
     }
-    const { response, mentions, additionalMessages, mediaFile, mediaCaption } = routed;
+    const { response, mentions, additionalMessages, mediaFile, mediaCaption, mediaAsVoice } = routed;
     const _dur = Date.now() - _t0;
     if (_dur > 3000) console.warn(`[latency] slow command "${cleanText.slice(0, 40)}" took ${_dur}ms`);
 
@@ -296,7 +326,12 @@ export async function handleMessage(client: any, rawMsg: any) {
     if (mediaFile) {
       try {
         const media = MessageMedia.fromFilePath(mediaFile);
-        await rawMsg.reply(media, undefined, mediaCaption ? { caption: mediaCaption } : undefined);
+        if (mediaAsVoice) {
+          const chat = await rawMsg.getChat();
+          await client.sendMessage(chat.id._serialized, media, { sendAudioAsVoice: true });
+        } else {
+          await rawMsg.reply(media, undefined, mediaCaption ? { caption: mediaCaption } : undefined);
+        }
       } catch (e) {
         console.error("[media] Failed to send media:", e);
       }
@@ -304,6 +339,14 @@ export async function handleMessage(client: any, rawMsg: any) {
 
     // Empty response = handler already sent its own message (e.g. memory game sends + schedules deletion)
     if (!fullResponse.trim()) return;
+
+    if (!isCommand && await sendCloneAudioReplyIfEnabled(client, rawMsg, msg, fullResponse)) {
+      if (isGroup) {
+        addBotMessageToHistory(msg.groupId, fullResponse);
+        addRecentMessage(`[Bot]: ${fullResponse.slice(0, 200)}`);
+      }
+      return;
+    }
 
     await sendReply(client, rawMsg, fullResponse, mentions);
 
