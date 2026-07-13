@@ -50,6 +50,7 @@ import {
   handleReport, constructionHelp,
 } from "./features/construction/index.js";
 import { renderMainHelp } from "./help.js";
+import { handleCloneCommand } from "./features/clone.js";
 
 function parseCommand(text: string): { command: string; args: string } {
   if (!text.startsWith("!")) return { command: "chat", args: text };
@@ -177,6 +178,9 @@ export async function routeMessage(msg: BotMessage, recentMessages: string[] = [
       return {
         response: renderMainHelp(samePhone(msg.from, process.env.BOT_OWNER_PHONE)),
       };
+
+    case "clone":
+      return handleCloneCommand(args, msg);
 
     // Games
     case "quiz":
