@@ -346,12 +346,12 @@ async function handlePiCommand(
         await client.sendMessage(to, "📦 Updating BanterAgent...");
         const gitOut = await runSafe("cd /home/pi/banteragent && git pull 2>&1", 30000);
         const npmOut = await runSafe("cd /home/pi/banteragent && npm install --prefer-offline 2>&1 | tail -3", 60000);
-        const buildOut = await runSafe("cd /home/pi/banteragent && npm run build 2>&1 | tail -5", 60000);
-        if (buildOut.includes("error")) {
-          reply = `❌ Build failed:\n\`\`\`\n${buildOut.slice(0, 500)}\n\`\`\``;
+        const typecheckOut = await runSafe("cd /home/pi/banteragent && npx tsc --noEmit 2>&1", 60000);
+        if (typecheckOut.includes("error")) {
+          reply = `❌ Typecheck failed:\n\`\`\`\n${typecheckOut.slice(0, 500)}\n\`\`\``;
         } else {
           // v2: never auto-restart — code is ready, restart only on explicit confirm
-          reply = `✅ Code updated & build clean!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\`\n⚠️ Changes apply on next restart. Reply *!pi confirm restart* when ready.`;
+          reply = `✅ Code updated & typecheck clean!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\`\n⚠️ Changes apply on next restart. Reply *!pi confirm restart* when ready.`;
         }
       } else {
         reply = "Usage: !pi update bot";
