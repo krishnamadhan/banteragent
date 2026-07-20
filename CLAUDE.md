@@ -3,7 +3,7 @@
 WhatsApp group bot for one friend group (~7 people). Acts like a funny Tamil friend: Tanglish replies, games, fantasy cricket, expenses/construction tracking, awards, auto-responses.
 
 ## Hard Rules
-- **NEVER restart the `banteragent` PM2 process** — risks the WhatsApp auth session. Code edits stay dormant until its next *natural* restart (crash/reboot). Ship changes, verify `npx tsc --noEmit`, and wait — or get Madhan's explicit go-ahead.
+- **Restarting `banteragent` PM2 is SAFE** — WhatsApp auth persists across pm2 restarts (corrected 2026-07-20; Madhan uses `!restart` from his phone as a recovery tool). Avoid gratuitous restarts (drops in-flight messages, ~30s downtime). Code edits stay dormant until restart — ship changes, verify `npx tsc --noEmit`, then restart only when explicitly needed.
 - WhatsApp auth lives in `auth/` (puppeteer Chromium profile, gitignored). Never delete or modify. Nightly backup: `~/scripts/nightly-backup.sh` → `~/backups/nightly/`.
 - Secrets in `.env` (gitignored). Never commit; never print values.
 - Ban-risk: this uses whatsapp-web.js (unofficial). Keep cooldowns/rate limits intact; don't add bulk-send loops.
