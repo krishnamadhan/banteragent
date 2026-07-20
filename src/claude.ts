@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { devlog, startDevServer } from "./devlog.js";
+import { devlog } from "./devlog.js";
 import { monClaude } from "./monitor.js";
 import { getISTDateString, getISTYear, buildMainModePrompt } from "./prompts.js";
 import { getGroupConfig } from "./group-config.js";
@@ -26,9 +26,6 @@ function saveModesToFile(modes: Record<string, string>): void {
     console.warn("[mode] Failed to save modes file:", e);
   }
 }
-
-// Start dev dashboard if DEV_LOG env var is set
-if (process.env.DEV_LOG === "1") startDevServer();
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
