@@ -19,17 +19,23 @@ Solli Adi prediction: `!solli !predict` · Admin: `!pi !led !cosmo !refreshgames
 - AB-055: closed unguarded restart paths; fixed stale `!run` session context
 - AB-056: owner-DM fall-through — admin-handler no longer swallows router cmds
 - AB-059: `!riddle` handler; mute duration fix; welcome rewrite; update-bot check
+- AB-061: task telemetry + silent-failure streak escalation
+- AB-063: devlog stripped → monitor.jsonl JSONL
+- AB-064: weekly monitor stats in Monday health report
 - AB-066: per-chat `recentMessages` buffer (was global — cross-group leak closed)
+- AB-073: `!pi logs <svc>`, `!pi wa`, `!pi backup` offsite section
+- AB-058+AB-030: `!pi jobs` (schedule.json table + last-run), `!pi run <task> [confirm]`, startup drift detector
 - `!led bulb` banteragent half (AB-014), `!cosmo` proxy + `/cosmo-notify` (AB-007)
 
 ## Next Priorities
 | ID | Title | Status |
 |----|-------|--------|
-| AB-058 | schedule.json SOT + drift validation + !pi jobs | [in progress on board] |
-| AB-060 | Command registry → router dispatch + generated !help | [in progress on board] |
-| AB-067 | Group memory: !remember / !forget + chat context | [in progress on board] |
-| AB-073 | !pi ops: logs \<svc\>, WA session health, offsite backup status | [in progress on board] |
-| AB-063 | Strip dead devlog; surface into monitor.jsonl | review |
+| AB-060 | Command registry → router dispatch + generated !help | backlog P2 |
+| AB-067 | Group memory: !remember / !forget + chat context | backlog P2 |
+| AB-068 | Nightly memory distiller (7d transcript + Haiku) | backlog P2 |
+| AB-073 | !pi ops: logs, wa, backup offsite | done — staged dormant |
+| AB-058 | schedule.json SOT + !pi jobs | done — live (pi-scheduler restarted) |
+| AB-030 | !pi run <task> | done — staged dormant |
 
 ## Known Issues (none critical post-2026-07-20 merges)
 - `pino` dep unused (console.* everywhere) — queued removal
