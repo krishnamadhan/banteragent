@@ -234,7 +234,7 @@ export function handleSplit(args: string): string {
 // ===== CHAT SUMMARY / CATCHUP =====
 export async function handleSummary(groupId: string): Promise<string> {
   const { getRecentMessages } = await import("../listener.js");
-  const msgs = getRecentMessages();
+  const msgs = getRecentMessages(groupId);
 
   if (msgs.length < 3) {
     return "Machaan, group-la konjam messages irundha summary tharean! Innum pesu.";
@@ -281,9 +281,9 @@ Reply with ONLY the translation on a single line. No labels, no explanation.`
 }
 
 // ===== VIBE CHECK — Mood analysis of recent messages =====
-export async function handleVibeCheck(): Promise<string> {
+export async function handleVibeCheck(groupId: string): Promise<string> {
   const { getRecentMessages } = await import("../listener.js");
-  const msgs = getRecentMessages();
+  const msgs = getRecentMessages(groupId);
   if (msgs.length < 5) return "Group-la konjam messages irukaanum machaan! Pesa pesa vibe check pannalam.";
 
   return await generateContent(
