@@ -7,13 +7,17 @@ import * as path from "path";
 import { samePhone } from "./phone.js";
 import { renderPiHelp } from "./help.js";
 import { getClaudeUsageSummary } from "./monitor.js";
+import { getLastGroupMessageTime } from "./listener.js";
 
 const execAsync = promisify(exec);
 const STATUS_FILE = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
 const LOG_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-out.log");
 const ERR_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-err.log");
-const QR_FLAG     = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
-const PI_LAN_HOST = "192.168.1.200";
+const QR_FLAG         = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
+const OFFSITE_STATE   = path.join(process.env.HOME ?? "/home/pi", ".local/state/offsite-backup-last-ok");
+const OFFSITE_LOG     = path.join(process.env.HOME ?? "/home/pi", "logs/offsite-backup.log");
+const BANTERAGENT_AUTH = path.join(process.env.HOME ?? "/home/pi", "banteragent/auth");
+const PI_LAN_HOST     = "192.168.1.200";
 
 function isAdmin(senderPhone: string): boolean {
   return samePhone(senderPhone, process.env.PI_ADMIN_NUMBER)
@@ -204,9 +208,24 @@ async function handlePiCommand(
         await client.sendMessage(to, "💾 Running backup now...");
         await runSafe("/home/pi/scripts/nightly-backup.sh", 120000);
       }
-      const listing = await runSafe("ls -lht /home/pi/backups/nightly/ 2>/dev/null | tail -n +2 | awk '{print $9, \"(\" $5 \")\"}' | head -9");
-      const logTail = await runSafe("tail -4 /home/pi/logs/nightly-backup.log 2>/dev/null");
-      reply = `*Nightly Backups* (~/backups/nightly)\n━━━━━━━━━━━━━━━━━━━\n\`\`\`\n${listing || "none found"}\n\`\`\`\n*Last run log:*\n\`\`\`\n${logTail || "no log"}\n\`\`\`\n_Trigger manually: !pi backup now_`;
+      const [listing, logTail, offsiteLogTail] = await Promise.all([
+        runSafe("ls -lht /home/pi/backups/nightly/ 2>/dev/null | tail -n +2 | awk '{print $9, \"(\" $5 \")\"}' | head -9"),
+        runSafe("tail -4 /home/pi/logs/nightly-backup.log 2>/dev/null"),
+        runSafe(`tail -3 "${OFFSITE_LOG}" 2>/dev/null`),
+      ]);
+      const offsiteEpoch = parseInt(
+        (await runSafe(`cat "${OFFSITE_STATE}" 2>/dev/null`).catch(() => "")) || "0"
+      ) || 0;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const offsiteAgeH = offsiteEpoch > 0 ? Math.floor((nowSec - offsiteEpoch) / 3600) : -1;
+      const offsiteLine = offsiteEpoch === 0
+        ? "🚨 Never synced (AB-038 pending or remote not configured)"
+        : offsiteAgeH >= 50
+          ? `🚨 ${offsiteAgeH}h ago — CRITICAL, SD card is only copy`
+          : offsiteAgeH >= 26
+            ? `⚠️ ${offsiteAgeH}h ago — stale`
+            : `✅ ${offsiteAgeH}h ago`;
+      reply = `*Nightly Backups* (~/backups/nightly)\n━━━━━━━━━━━━━━━━━━━\n\`\`\`\n${listing || "none found"}\n\`\`\`\n*Last run log:*\n\`\`\`\n${logTail || "no log"}\n\`\`\`\n*Offsite (Google Drive):* ${offsiteLine}\n\`\`\`\n${offsiteLogTail || "no offsite log"}\n\`\`\`\n_Trigger manually: !pi backup now_`;
       break;
     }
 
@@ -291,10 +310,31 @@ async function handlePiCommand(
     }
 
     case "logs": {
-      const n = Math.min(parseInt(args[0] ?? "20") || 20, 50);
-      if (!fs.existsSync(LOG_FILE)) { reply = `Log not found: ${LOG_FILE}`; break; }
-      const { stdout } = await execAsync(`tail -${n} "${LOG_FILE}"`);
-      reply = `*Last ${n} lines of BanterAgent logs:*\n\`\`\`\n${stdout.trim().slice(0, 3000)}\n\`\`\``;
+      // !pi logs [n]          → banteragent out log
+      // !pi logs <svc> [n]    → any PM2 service log (validated against pm2 jlist)
+      const firstIsNum = args.length > 0 && !isNaN(parseInt(args[0]));
+      const svc  = (!firstIsNum && args.length > 0) ? args[0] : null;
+      const nArg = svc ? args[1] : args[0];
+      const n    = Math.min(parseInt(nArg ?? "20") || 20, 50);
+
+      if (!svc) {
+        if (!fs.existsSync(LOG_FILE)) { reply = `Log not found: ${LOG_FILE}`; break; }
+        const { stdout } = await execAsync(`tail -${n} "${LOG_FILE}"`);
+        reply = `*Last ${n} lines of BanterAgent logs:*\n\`\`\`\n${stdout.trim().slice(0, 3000)}\n\`\`\``;
+      } else {
+        const pm2Raw = await runSafe("pm2 jlist");
+        let procs: any[] = [];
+        try { procs = JSON.parse(pm2Raw); } catch {}
+        const proc = procs.find((p: any) => p.name === svc);
+        if (!proc) {
+          reply = `Unknown service: *${svc}*\nKnown: ${procs.map((p: any) => p.name).join(", ") || "none"}`;
+          break;
+        }
+        const logPath: string = proc.pm2_env?.pm_out_log_path ?? "";
+        if (!logPath || !fs.existsSync(logPath)) { reply = `No log file found for *${svc}*`; break; }
+        const { stdout } = await execAsync(`tail -${n} "${logPath}"`);
+        reply = `*Last ${n} lines of ${svc}:*\n\`\`\`\n${stdout.trim().slice(0, 3000)}\n\`\`\``;
+      }
       break;
     }
 
@@ -303,6 +343,55 @@ async function handlePiCommand(
       const { stdout } = await execAsync(`tail -20 "${ERR_FILE}"`);
       const content = stdout.trim();
       reply = content ? `*Recent errors:*\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\`` : "✅ No recent errors!";
+      break;
+    }
+
+    case "wa": {
+      const [waState, chromiumRss, pm2Raw, authNewest] = await Promise.all([
+        Promise.race<string>([
+          (client.getState() as Promise<string>),
+          new Promise<string>((_, r) => setTimeout(() => r(new Error("timeout")), 5000)),
+        ]).catch(() => "UNKNOWN"),
+        runSafe("ps aux | grep -i chromium | grep -v grep | awk '{sum += $6} END {printf \"%.0f\", sum/1024}'"),
+        runSafe("pm2 jlist"),
+        runSafe(`find "${BANTERAGENT_AUTH}" -type f -printf '%T@\\n' 2>/dev/null | sort -n | tail -1`),
+      ]);
+
+      const nowMs = Date.now();
+      const lastInbound = getLastGroupMessageTime();
+      const lastInboundMin = lastInbound > 0 ? Math.floor((nowMs - lastInbound) / 60000) : -1;
+      const qrFlag = fs.existsSync(QR_FLAG);
+      const authEpoch = parseFloat(authNewest || "0");
+      const authAgeH  = authEpoch > 0 ? Math.floor((nowMs / 1000 - authEpoch) / 3600) : -1;
+      const chromiumMB = parseInt(chromiumRss || "0") || 0;
+
+      let pm2Restarts = 0;
+      try {
+        const procs: any[] = JSON.parse(pm2Raw);
+        const ba = procs.find((p: any) => p.name === "banteragent");
+        pm2Restarts = ba?.pm2_env?.restart_time ?? 0;
+      } catch {}
+
+      const connected = (waState as string) === "CONNECTED";
+      const trafficOk = lastInboundMin >= 0 && lastInboundMin < 360;
+      const verdict = qrFlag
+        ? "🚨 QR SCAN NEEDED — open WhatsApp to reconnect"
+        : !connected
+          ? `⚠️ State: ${waState}`
+          : !trafficOk
+            ? "⚠️ CONNECTED but no inbound traffic >6h"
+            : "✅ CONNECTED";
+
+      reply = [
+        `*WhatsApp Health* ${verdict}`,
+        "━━━━━━━━━━━━━━━━━━━",
+        `Client state:   ${waState}`,
+        `Last inbound:   ${lastInboundMin >= 0 ? lastInboundMin + "m ago" : "unknown (restart?)"}`,
+        `Chromium RSS:   ${chromiumMB}MB`,
+        `PM2 restarts:   ${pm2Restarts}`,
+        `Auth session:   ${authAgeH >= 0 ? authAgeH + "h old" : "unknown"}`,
+        qrFlag ? "🚨 QR flag SET — phone scan required!" : "✅ No QR flag",
+      ].join("\n");
       break;
     }
 
