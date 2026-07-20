@@ -217,11 +217,13 @@ export function renderPiHelp(): string {
     {
       heading: "💾 *Backups / system:*",
       lines: [
-        "  !pi backup [now] — Nightly backup status / trigger",
+        "  !pi backup [now] — Nightly + offsite backup status / trigger",
+        "  !pi wa — WhatsApp session health (state, inbound lag, Chromium RSS)",
         "  !pi cost [days] — AI token spend estimate",
         "  !pi top — Top processes by RAM",
         "  !pi temp / battery / disk / network / uptime",
-        "  !pi logs [n] — Last N log lines",
+        "  !pi logs [n] — Last N banteragent log lines",
+        "  !pi logs <svc> [n] — Last N lines of any PM2 service log",
         "  !pi errors — Recent error logs",
       ],
     },
