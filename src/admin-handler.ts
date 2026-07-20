@@ -301,23 +301,12 @@ ${task}`;
 !led tv on|off — TV Ambilight sync
 !reboot — reboot Pi
 !shutdown — shutdown Pi
-!run <task> — spawn a Claude session to execute a task`;
+!run <task> — spawn a Claude session to execute a task
+Send !h for the full bot command list`;
         break;
 
-      // Commands handled by the main router — fall through so they work in DM too
-      case "bug":
-      case "fantasy":
-      case "fl":
-      case "solli":
-      case "predict":
-      case "cosmo":
-      case "led":
-      case "lights":
-      case "light":
-        return false;
-
       default:
-        reply = `Unknown command: !${cmd}\nSend *!help* for available commands.`;
+        return false;
     }
   } catch (err: any) {
     reply = `*[Monitor] Error running !${cmd}*\n${err.message?.slice(0, 300)}`;
