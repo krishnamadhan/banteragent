@@ -6,13 +6,16 @@
  * Each task is an independent async function; failures are isolated.
  */
 
-import { sendMessage, sendMentionMessage, getLastGroupMessageTime, addRecentMessage } from "./listener.js";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { join } from "path";
+import { sendMessage, sendMentionMessage, getLastGroupMessageTime, addRecentMessage, setOnSendHook } from "./listener.js";
 import { generateContent, addBotMessageToHistory } from "./claude.js";
 import { monTaskStart, monTaskEnd, monMsgSent, monError, recordBotMsgTime } from "./monitor.js";
 import { generateBirthdayWish, generateWordOfDay } from "./features/fun.js";
 import { generateAwards, getMonthlyRecapStats } from "./features/analytics.js";
 import { checkDueReminders } from "./features/reminders.js";
 import { checkCricketUpdates } from "./features/cricket.js";
+import { shouldEscalateSilentTaskFailure, silentTaskFailureThreshold } from "./features/task-failure-streaks.js";
 import { scheduledNewsDrop } from "./features/news.js";
 import { handleGameCommand } from "./features/games.js";
 import {
@@ -29,6 +32,49 @@ import {
 import { supabase } from "./supabase.js";
 import type { BotMessage } from "./types.js";
 import { userJid } from "./phone.js";
+
+type FailureStreaks = Record<string, number>;
+
+function dataDir(): string {
+  return process.env.BANTERAGENT_DATA_DIR || join(process.cwd(), "data");
+}
+
+function taskFailuresPath(): string {
+  return join(dataDir(), "task-failures.json");
+}
+
+function loadTaskFailures(): FailureStreaks {
+  try {
+    return JSON.parse(readFileSync(taskFailuresPath(), "utf8")) as FailureStreaks;
+  } catch {
+    return {};
+  }
+}
+
+function saveTaskFailures(failures: FailureStreaks): void {
+  mkdirSync(dataDir(), { recursive: true });
+  const path = taskFailuresPath();
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(failures, null, 2) + "\n", "utf8");
+  renameSync(tmp, path);
+}
+
+function updateTaskFailureStreak(task: string, failed: boolean): number {
+  const failures = loadTaskFailures();
+  const next = failed ? (failures[task] ?? 0) + 1 : 0;
+  failures[task] = next;
+  saveTaskFailures(failures);
+  return next;
+}
+
+function recordTaskFailureStreak(task: string, failed: boolean): number {
+  try {
+    return updateTaskFailureStreak(task, failed);
+  } catch (e) {
+    console.warn(`[task-runner] failed to update failure streak for ${task}:`, e);
+    return 0;
+  }
+}
 
 // ── Auto-game-drop state (persistent across cron ticks within same process) ──
 let autoGameDropCount = 0;
@@ -612,19 +658,6 @@ const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
 // Tracks whether sendMessage was called during the current task
 let _taskSentMsg = false;
 
-// Wrap sendMessage so monitor can detect if a task produced output
-const _origSendMessage = sendMessage;
-const _instrumentedSend = async (to: string, msg: string) => {
-  _taskSentMsg = true;
-  recordBotMsgTime();
-  monMsgSent({ task: _currentTaskName, preview: msg.slice(0, 80), chars: msg.length });
-  return _origSendMessage(to, msg);
-};
-// Patch at module level so all task functions use the instrumented version
-// (tasks import sendMessage from listener directly — we shadow it via re-export trick)
-// Instead, we detect via the monMsgSent calls in individual task wrappers above.
-// The flag _taskSentMsg is reset per runTask call.
-
 let _currentTaskName = "";
 
 // Tasks where transient errors (Vercel 502, timeouts) are expected — skip DM noise
@@ -637,8 +670,8 @@ const SILENT_ERROR_TASKS = new Set([
 // Throttle: only one DM per task name per hour
 const _lastErrorDm = new Map<string, number>();
 
-async function notifyAdminError(task: string, err: string): Promise<void> {
-  if (SILENT_ERROR_TASKS.has(task)) return;
+async function notifyAdminError(task: string, err: string, options: { bypassSilent?: boolean } = {}): Promise<void> {
+  if (!options.bypassSilent && SILENT_ERROR_TASKS.has(task)) return;
   const now = Date.now();
   if ((now - (_lastErrorDm.get(task) ?? 0)) < 60 * 60 * 1000) return;
   _lastErrorDm.set(task, now);
@@ -681,18 +714,33 @@ export async function runTask(name: string, groupId: string, force = false): Pro
   monTaskStart(name);
 
   try {
+    setOnSendHook((_to, msg) => {
+      _taskSentMsg = true;
+      recordBotMsgTime();
+      monMsgSent({ task: _currentTaskName, preview: msg.slice(0, 80), chars: msg.length });
+    });
     await fn(groupId);
     if (ONCE_DAILY_TASKS.has(name)) _taskRanOnDate.set(name + ":" + groupId, istDateStr());
+    recordTaskFailureStreak(name, false);
     monTaskEnd(name, { ok: true, sent: _taskSentMsg });
     return { ok: true };
   } catch (e: any) {
     const errMsg = e?.message ?? String(e);
     console.error(`[task-runner] ${name} failed:`, errMsg);
+    setOnSendHook(null);
     monTaskEnd(name, { ok: false, sent: _taskSentMsg, error: errMsg });
     monError(name, e);
-    await notifyAdminError(name, errMsg);
+    const failures = recordTaskFailureStreak(name, true);
+    if (SILENT_ERROR_TASKS.has(name)) {
+      if (shouldEscalateSilentTaskFailure(failures, silentTaskFailureThreshold(ONCE_DAILY_TASKS.has(name)))) {
+        await notifyAdminError(name, `${errMsg}\n\nConsecutive failures: ${failures}`, { bypassSilent: true });
+      }
+    } else {
+      await notifyAdminError(name, errMsg);
+    }
     return { ok: false, error: errMsg };
   } finally {
+    setOnSendHook(null);
     _currentTaskName = "";
   }
 }

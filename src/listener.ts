@@ -18,6 +18,11 @@ import {
 import pkg from "whatsapp-web.js";
 const { MessageMedia } = pkg;
 
+export let onSend: ((to: string, msg: string) => void) | null = null;
+export function setOnSendHook(hook: ((to: string, msg: string) => void) | null): void {
+  onSend = hook;
+}
+
 // ===== Sticker state =====
 let lastSavedStickerId: string | null = null; // tracks last sticker saved via DM for tag-enhance flow
 
@@ -504,6 +509,7 @@ export async function sendMessage(jid: string, text: string) {
     return;
   }
   try {
+    onSend?.(jid, text);
     await client.sendMessage(jid, text);
   } catch (error) {
     console.error("Failed to send scheduled message:", error);
