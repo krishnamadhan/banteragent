@@ -8,16 +8,28 @@ import { samePhone } from "./phone.js";
 import { renderPiHelp } from "./help.js";
 import { getClaudeUsageSummary } from "./monitor.js";
 import { getLastGroupMessageTime } from "./listener.js";
+import { TASK_NAMES } from "./task-runner.js";
 
 const execAsync = promisify(exec);
-const STATUS_FILE = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
-const LOG_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-out.log");
-const ERR_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-err.log");
-const QR_FLAG         = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
-const OFFSITE_STATE   = path.join(process.env.HOME ?? "/home/pi", ".local/state/offsite-backup-last-ok");
-const OFFSITE_LOG     = path.join(process.env.HOME ?? "/home/pi", "logs/offsite-backup.log");
+const STATUS_FILE    = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status.json");
+const LOG_FILE       = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-out.log");
+const ERR_FILE       = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-err.log");
+const MONITOR_LOG    = path.join(process.env.HOME ?? "/home/pi", "logs/monitor.jsonl");
+const QR_FLAG        = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
+const OFFSITE_STATE  = path.join(process.env.HOME ?? "/home/pi", ".local/state/offsite-backup-last-ok");
+const OFFSITE_LOG    = path.join(process.env.HOME ?? "/home/pi", "logs/offsite-backup.log");
 const BANTERAGENT_AUTH = path.join(process.env.HOME ?? "/home/pi", "banteragent/auth");
-const PI_LAN_HOST     = "192.168.1.200";
+const SCHEDULE_FILE  = "/home/pi/pi-scheduler/schedule.json";
+const PI_LAN_HOST    = "192.168.1.200";
+
+// Tasks that send to groups — require '!pi run <task> confirm' to avoid accidental spam.
+// pi-health-report and reminders-check are safe (admin DM / personal only).
+const GROUP_FACING_RUN = new Set([
+  "morning-roast", "horoscope", "word-of-day", "history", "movie-fact",
+  "weekend-prompt", "finance-update", "news-morning", "weekly-awards",
+  "monthly-recap", "birthday-check", "auto-game-drop", "cricket-alerts",
+  "weekly-score-reset",
+]);
 
 function isAdmin(senderPhone: string): boolean {
   return samePhone(senderPhone, process.env.PI_ADMIN_NUMBER)
@@ -392,6 +404,96 @@ async function handlePiCommand(
         `Auth session:   ${authAgeH >= 0 ? authAgeH + "h old" : "unknown"}`,
         qrFlag ? "🚨 QR flag SET — phone scan required!" : "✅ No QR flag",
       ].join("\n");
+      break;
+    }
+
+    case "jobs": {
+      if (args[0] === "cron") {
+        // Show system crontab with alert-wrap markers
+        const ctab = await runSafe("crontab -l 2>/dev/null");
+        if (!ctab) { reply = "No crontab entries."; break; }
+        const annotated = ctab.split("\n").map(l => {
+          if (!l.trim() || l.startsWith("#")) return l;
+          return (l.includes("cron-alert-wrap.sh") ? "🔔 " : "   ") + l;
+        }).join("\n");
+        reply = `*System Crontab* (🔔=alert-wrapped)\n\`\`\`\n${annotated.slice(0, 3000)}\n\`\`\``;
+        break;
+      }
+
+      let sched: { task: string; cron: string; enabled: boolean; note?: string }[] = [];
+      try { sched = JSON.parse(fs.readFileSync(SCHEDULE_FILE, "utf8")); } catch {
+        reply = "❌ Could not read schedule.json"; break;
+      }
+
+      // Parse last 2000 lines of monitor.jsonl for task_end events
+      const lastRun = new Map<string, { t: string; ok: boolean }>();
+      try {
+        if (fs.existsSync(MONITOR_LOG)) {
+          const raw = await runSafe(`tail -2000 "${MONITOR_LOG}"`);
+          for (const line of raw.split("\n")) {
+            try {
+              const ev = JSON.parse(line);
+              if (ev.ev === "task_end" && ev.task) lastRun.set(ev.task, { t: ev.t, ok: ev.ok });
+            } catch {}
+          }
+        }
+      } catch {}
+
+      function fmtAgo(isoStr: string): string {
+        const ageMin = Math.floor((Date.now() - new Date(isoStr).getTime()) / 60000);
+        if (ageMin < 60) return `${ageMin}m`;
+        const h = Math.floor(ageMin / 60), m = ageMin % 60;
+        return `${h}h${m ? m + "m" : ""}`;
+      }
+
+      const enabled  = sched.filter(e => e.enabled);
+      const disabled = sched.filter(e => !e.enabled);
+
+      const header = `${"CRON".padEnd(18)} ${"TASK".padEnd(30)} LAST`;
+      const rows = enabled.map(e => {
+        const lr = lastRun.get(e.task);
+        const last = lr ? `${lr.ok ? "✅" : "❌"} ${fmtAgo(lr.t)} ago` : "—";
+        return `${e.cron.padEnd(18)} ${e.task.padEnd(30)} ${last}`;
+      }).join("\n");
+
+      reply = `*Scheduled Tasks (${enabled.length} active)*\n\`\`\`\n${header}\n${rows}\n\`\`\``;
+      if (disabled.length) reply += `\n\n*Disabled (${disabled.length}):* ${disabled.map(e => e.task).join(", ")}`;
+      reply += `\n\n_System crontab: !pi jobs cron  ·  Trigger: !pi run <task>_`;
+      break;
+    }
+
+    case "run": {
+      const jobName = args[0];
+      const confirmed = args[1] === "confirm";
+
+      if (!jobName) {
+        // List available tasks from TASK_NAMES, split by safe vs group-facing
+        const safe = TASK_NAMES.filter(t => !GROUP_FACING_RUN.has(t));
+        const groupFacing = TASK_NAMES.filter(t => GROUP_FACING_RUN.has(t));
+        reply = `*!pi run — Manual Task Triggers*\n━━━━━━━━━━━━━━━━━━━\n✅ *Safe (no confirm):*\n${safe.map(t => "  " + t).join("\n")}\n\n⚠️ *Group-facing (add confirm):*\n${groupFacing.map(t => "  " + t).join("\n")}\n\n_Usage: !pi run <task> [confirm]_`;
+        break;
+      }
+
+      if (!TASK_NAMES.includes(jobName)) {
+        reply = `❌ Unknown task: *${jobName}*\nSend *!pi run* to list all tasks.`;
+        break;
+      }
+
+      if (GROUP_FACING_RUN.has(jobName) && !confirmed) {
+        reply = `⚠️ *${jobName}* sends to group(s). Confirm: *!pi run ${jobName} confirm*`;
+        break;
+      }
+
+      await client.sendMessage(to, `▶️ Running *${jobName}* (force=true)...`);
+      const t0 = Date.now();
+      const raw = await runSafe(
+        `curl -s -X POST http://127.0.0.1:3099/run-task -H 'Content-Type: application/json' -d '{"task":"${jobName}","force":true}'`,
+        15000
+      );
+      const elapsed = Date.now() - t0;
+      let targets = 0;
+      try { targets = JSON.parse(raw).targets ?? 0; } catch {}
+      reply = `✅ *${jobName}* dispatched to ${targets} group(s) in ${elapsed}ms.\n_Check !pi logs for output._`;
       break;
     }
 

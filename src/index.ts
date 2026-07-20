@@ -10,6 +10,7 @@ import { supabase } from "./supabase.js";
 import { seedKnownCouples } from "./features/profiles.js";
 import { syncArchiveFromSupabase } from "./features/games.js";
 import { startInternalServer } from "./internal-server.js";
+import { TASK_NAMES } from "./task-runner.js";
 
 let client: InstanceType<typeof Client>;
 
@@ -176,4 +177,20 @@ console.log("🤖 BanterAgent v3 (whatsapp-web.js Edition)");
 console.log("=============================================\n");
 console.log("⏳ Starting browser... (first run takes ~30 seconds)\n");
 startInternalServer();
+
+// Drift check: warn at startup if schedule.json has enabled tasks not in TASK_MAP
+try {
+  const schedPath = "/home/pi/pi-scheduler/schedule.json";
+  if (fs.existsSync(schedPath)) {
+    const sched: { task: string; enabled: boolean }[] = JSON.parse(fs.readFileSync(schedPath, "utf8"));
+    const known = new Set(TASK_NAMES);
+    const unknown = sched.filter(e => e.enabled && !known.has(e.task)).map(e => e.task);
+    if (unknown.length > 0) {
+      console.warn(`[drift] schedule.json enabled tasks missing from TASK_MAP: ${unknown.join(", ")}`);
+    }
+  }
+} catch (e: any) {
+  console.warn("[drift] schedule.json check failed:", e.message);
+}
+
 connectToWhatsApp();

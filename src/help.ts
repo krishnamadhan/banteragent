@@ -228,6 +228,15 @@ export function renderPiHelp(): string {
       ],
     },
     {
+      heading: "⚙️ *Scheduler:*",
+      lines: [
+        "  !pi jobs — Scheduled tasks list (cron, last run status)",
+        "  !pi jobs cron — System crontab with alert-wrap markers",
+        "  !pi run — List all manually triggerable tasks",
+        "  !pi run <task> [confirm] — Fire a task now (group-facing needs confirm)",
+      ],
+    },
+    {
       heading: "🏗️ *Owner / admin:*",
       lines: [
         "  !refreshgames — Archive stats / add <game> [N] / all [N] / reset",
