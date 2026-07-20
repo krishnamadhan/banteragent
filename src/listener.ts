@@ -33,13 +33,28 @@ export function getLastGroupMessageTime(): number { return lastGroupMessageAt; }
 const userLastCommand = new Map<string, number>();
 const COMMAND_COOLDOWN_MS = 8_000; // 8 seconds between commands per user
 
-// Recent messages buffer for auto-response context
-const recentMessages: string[] = [];
+// Recent messages buffer for auto-response context, isolated per group/DM chat.
+const recentByChat = new Map<string, string[]>();
+const recentChatTouchedAt = new Map<string, number>();
 const MAX_RECENT = 25;  // holds enough context for !bug reports (last 20)
-export function getRecentMessages(): string[] { return [...recentMessages]; }
-export function addRecentMessage(text: string): void {
-  recentMessages.push(text);
-  if (recentMessages.length > MAX_RECENT) recentMessages.shift();
+const RECENT_CHAT_IDLE_MS = 24 * 60 * 60 * 1000;
+export function getRecentMessages(chatId: string): string[] {
+  return [...(recentByChat.get(chatId) ?? [])];
+}
+export function addRecentMessage(chatId: string, text: string): void {
+  const now = Date.now();
+  for (const [id, lastSeen] of recentChatTouchedAt) {
+    if (now - lastSeen > RECENT_CHAT_IDLE_MS) {
+      recentByChat.delete(id);
+      recentChatTouchedAt.delete(id);
+    }
+  }
+
+  const messages = recentByChat.get(chatId) ?? [];
+  messages.push(text);
+  if (messages.length > MAX_RECENT) messages.shift();
+  recentByChat.set(chatId, messages);
+  recentChatTouchedAt.set(chatId, now);
 }
 
 // Trigger keywords for direct bot invocation
@@ -196,8 +211,7 @@ export async function handleMessage(client: any, rawMsg: any) {
   if (!text.startsWith("!")) extractProfileInfo(msg).catch(() => {});
 
   // Add to recent messages buffer
-  recentMessages.push(`[${senderName}]: ${text}`);
-  if (recentMessages.length > MAX_RECENT) recentMessages.shift();
+  addRecentMessage(msg.groupId, `[${senderName}]: ${text}`);
 
   // ===== DM TAG ENHANCE — text reply to sticker-save message updates when_to_use =====
   if (!isGroup && !isSticker && text && quotedMsg) {
@@ -286,12 +300,12 @@ export async function handleMessage(client: any, rawMsg: any) {
         await sendReply(client, rawMsg, imageReply);
         if (isGroup) {
           addBotMessageToHistory(msg.groupId, imageReply);
-          addRecentMessage(`[Bot]: ${imageReply.slice(0, 200)}`);
+          addRecentMessage(msg.groupId, `[Bot]: ${imageReply.slice(0, 200)}`);
         }
         // Save sticker to library in background (fire-and-forget)
         if (imageSource.kind === "sticker") {
           const { saveSticker } = await import("./features/stickers.js");
-          saveSticker(media.data, media.mimetype, isGroup ? "group" : "dm", recentMessages.slice(-6))
+          saveSticker(media.data, media.mimetype, isGroup ? "group" : "dm", getRecentMessages(msg.groupId).slice(-6))
             .catch((e) => console.error("[sticker] background save error:", e));
         }
       } catch (e) {
@@ -305,7 +319,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     const _t0 = Date.now();
     let routed: Awaited<ReturnType<typeof routeMessage>>;
     try {
-      routed = await routeMessage(msg, recentMessages);
+      routed = await routeMessage(msg, getRecentMessages(msg.groupId));
     } catch (e) {
       console.error("[route] command failed:", e);
       await sendReply(client, rawMsg, "Command fail aayiduchu da. Logs-la note panniten, retry pannu.");
@@ -343,7 +357,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     if (!isCommand && await sendCloneAudioReplyIfEnabled(client, rawMsg, msg, fullResponse)) {
       if (isGroup) {
         addBotMessageToHistory(msg.groupId, fullResponse);
-        addRecentMessage(`[Bot]: ${fullResponse.slice(0, 200)}`);
+        addRecentMessage(msg.groupId, `[Bot]: ${fullResponse.slice(0, 200)}`);
       }
       return;
     }
@@ -361,7 +375,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     // Track bot's own response so it has context when users follow up
     if (isGroup) {
       addBotMessageToHistory(msg.groupId, fullResponse);
-      addRecentMessage(`[Bot]: ${fullResponse.slice(0, 200)}`);
+      addRecentMessage(msg.groupId, `[Bot]: ${fullResponse.slice(0, 200)}`);
     }
 
     // Occasionally follow up with a reaction meme (only for free-chat responses, not commands)
@@ -392,7 +406,7 @@ export async function handleMessage(client: any, rawMsg: any) {
   if (isSticker && isGroup) {
     const { saveSticker } = await import("./features/stickers.js");
     rawMsg.downloadMedia().then((media: any) =>
-      saveSticker(media.data, media.mimetype, "group", recentMessages.slice(-6))
+      saveSticker(media.data, media.mimetype, "group", getRecentMessages(msg.groupId).slice(-6))
     ).catch(() => {});
     return;
   }
@@ -405,7 +419,7 @@ export async function handleMessage(client: any, rawMsg: any) {
     if (autoResponse) {
       await sendReply(client, rawMsg, autoResponse);
       addBotMessageToHistory(msg.groupId, autoResponse);
-      addRecentMessage(`[Bot]: ${autoResponse.slice(0, 200)}`);
+      addRecentMessage(msg.groupId, `[Bot]: ${autoResponse.slice(0, 200)}`);
     }
   }
 }
@@ -447,7 +461,7 @@ async function evaluateAutoResponse(msg: BotMessage): Promise<string | null> {
 
   const mode = await getGroupMode(msg.groupId);
   const response = await shouldAutoRespond(
-    recentMessages.slice(-10),
+    getRecentMessages(msg.groupId).slice(-10),
     msg.text,
     msg.senderName,
     mode

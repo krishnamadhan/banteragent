@@ -90,7 +90,7 @@ async function taskWordOfDay(groupId: string) {
   if (word) {
     await sendMessage(groupId, word);
     addBotMessageToHistory(groupId, word);
-    addRecentMessage(`[Bot]: ${word}`);
+    addRecentMessage(groupId, `[Bot]: ${word}`);
   }
 }
 
@@ -116,7 +116,7 @@ async function taskMorningRoast(groupId: string) {
   const out = `${f.tag}\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
-  addRecentMessage(`[Bot]: ${out}`);
+  addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
 async function taskHistory(groupId: string) {
@@ -128,7 +128,7 @@ async function taskHistory(groupId: string) {
   const out = `📜 *THIS DAY IN TAMIL HISTORY*\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
-  addRecentMessage(`[Bot]: ${out}`);
+  addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
 async function taskMovieFact(groupId: string) {
@@ -138,7 +138,7 @@ async function taskMovieFact(groupId: string) {
   const out = `🎬 *RANDOM MOVIE FACT*\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
-  addRecentMessage(`[Bot]: ${out}`);
+  addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
 async function taskWeekendPrompt(groupId: string) {
@@ -148,7 +148,7 @@ async function taskWeekendPrompt(groupId: string) {
   const out = `🎉 *WEEKEND VANDAACHU*\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
-  addRecentMessage(`[Bot]: ${out}`);
+  addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
 async function taskFinanceUpdate(groupId: string) {
@@ -157,7 +157,7 @@ async function taskFinanceUpdate(groupId: string) {
   if (msg) {
     await sendMessage(groupId, msg);
     addBotMessageToHistory(groupId, msg);
-    addRecentMessage(`[Bot]: ${msg}`);
+    addRecentMessage(groupId, `[Bot]: ${msg}`);
   }
 }
 
@@ -166,7 +166,7 @@ async function taskNewsMorning(groupId: string) {
   const news = await scheduledNewsDrop(groupId, "mix");
   await sendMessage(groupId, news);
   addBotMessageToHistory(groupId, news);
-  addRecentMessage(`[Bot]: ${news}`);
+  addRecentMessage(groupId, `[Bot]: ${news}`);
 }
 
 async function taskWeeklyAwards(groupId: string) {
@@ -439,7 +439,7 @@ Write each person's horoscope in 1 funny Tanglish line — be specific to their 
   const out = `🔮 *DAILY HOROSCOPE*\n\n${msg}`;
   await sendMessage(groupId, out);
   addBotMessageToHistory(groupId, out);
-  addRecentMessage(`[Bot]: ${out}`);
+  addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
 // ─── Central dispatcher ───────────────────────────────────────────────────────

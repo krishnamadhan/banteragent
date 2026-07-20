@@ -303,7 +303,7 @@ Change: ${modeList}` };
       return { response: await handleTranslate(args) };
     case "vibecheck":
     case "vibe":
-      return { response: await handleVibeCheck() };
+      return { response: await handleVibeCheck(msg.groupId) };
     case "imagine":
       return { response: await handleImagine(args) };
     case "dialect":
