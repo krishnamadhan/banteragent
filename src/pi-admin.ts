@@ -13,6 +13,7 @@ const STATUS_FILE = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/status
 const LOG_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-out.log");
 const ERR_FILE    = path.join(process.env.HOME ?? "/home/pi", "logs/banteragent-err.log");
 const QR_FLAG     = path.join(process.env.HOME ?? "/home/pi", "pi-monitor/qr-needed.flag");
+const PI_LAN_HOST = "192.168.1.200";
 
 function isAdmin(senderPhone: string): boolean {
   return samePhone(senderPhone, process.env.PI_ADMIN_NUMBER)
@@ -267,7 +268,7 @@ async function handlePiCommand(
       const pm2  = s?.pm2 ?? {};
       const baProc = pm2["banteragent"];
       const baStatus = baProc ? `${baProc.status === "online" ? "Online ✅" : "DOWN 🚨"} | ${baProc.mem_mb}MB | ${baProc.restarts} restarts` : "N/A";
-      const qr   = s?.qr_needed ? "\n\n⚠️ *WhatsApp QR NEEDED!*\nRun: scp pi@192.168.1.30:~/banteragent/qr.png ~/Desktop/qr.png" : "";
+      const qr   = s?.qr_needed ? `\n\n⚠️ *WhatsApp QR NEEDED!*\nRun: scp pi@${PI_LAN_HOST}:~/banteragent/qr.png ~/Desktop/qr.png` : "";
 
       reply = `*Pi Status Report*\n━━━━━━━━━━━━━━━━━━━\n🌡️ Temp: ${temp}\n💾 RAM: ${ram}\n💿 Disk: ${disk}\n🔋 Battery: ${bat}\n📡 Network: ${net}\n🌐 Tailscale: ${ts}\n⏱️ Uptime: ${uptime}\n\n*BanterAgent*\n━━━━━━━━━━━━━━━━━━━\n${baStatus}${qr}`;
       break;
@@ -346,12 +347,12 @@ async function handlePiCommand(
         await client.sendMessage(to, "📦 Updating BanterAgent...");
         const gitOut = await runSafe("cd /home/pi/banteragent && git pull 2>&1", 30000);
         const npmOut = await runSafe("cd /home/pi/banteragent && npm install --prefer-offline 2>&1 | tail -3", 60000);
-        const buildOut = await runSafe("cd /home/pi/banteragent && npm run build 2>&1 | tail -5", 60000);
-        if (buildOut.includes("error")) {
-          reply = `❌ Build failed:\n\`\`\`\n${buildOut.slice(0, 500)}\n\`\`\``;
+        const typecheckOut = await runSafe("cd /home/pi/banteragent && npx tsc --noEmit 2>&1", 60000);
+        if (typecheckOut.includes("error")) {
+          reply = `❌ Typecheck failed:\n\`\`\`\n${typecheckOut.slice(0, 500)}\n\`\`\``;
         } else {
           // v2: never auto-restart — code is ready, restart only on explicit confirm
-          reply = `✅ Code updated & build clean!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\`\n⚠️ Changes apply on next restart. Reply *!pi confirm restart* when ready.`;
+          reply = `✅ Code updated & typecheck clean!\n\`\`\`\n${gitOut.slice(0, 200)}\n\`\`\`\n⚠️ Changes apply on next restart. Reply *!pi confirm restart* when ready.`;
         }
       } else {
         reply = "Usage: !pi update bot";

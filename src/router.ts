@@ -31,7 +31,7 @@ import { handleNews } from "./features/news.js";
 import { handleBugReport } from "./features/bugs.js";
 import { startBattle, startTop10, handlePicksNext, handlePicksAnswer } from "./features/picks.js";
 import { devlog } from "./devlog.js";
-import { invalidateGroupSettingsCache } from "./group-settings-cache.js";
+import { invalidateGroupSettingsCache, recordGroupMute } from "./group-settings-cache.js";
 import { handleFitboard, handlePushupNoVideo } from "./features/fitness.js";
 import { handlePiAdminMessage } from "./pi-admin.js";
 import { samePhone } from "./phone.js";
@@ -105,6 +105,15 @@ function parseLedBulbBody(args: string[]): { cmd: string; value?: any; bright?: 
   }
   const named = LED_COLORS[sub];
   return named ? { cmd: "color", value: named } : null;
+}
+
+function splitRiddleResponse(content: string): { riddle: string; answer: string } {
+  const riddleMatch = content.match(/RIDDLE:\s*(.+?)(?:\n\s*ANSWER:|$)/is);
+  const answerMatch = content.match(/ANSWER:\s*(.+)$/is);
+  return {
+    riddle: riddleMatch?.[1]?.trim() || content.trim(),
+    answer: answerMatch?.[1]?.trim() || "Answer generate aagala da, next riddle try pannalaam.",
+  };
 }
 
 export async function routeMessage(msg: BotMessage, recentMessages: string[] = []): Promise<CommandResult> {
@@ -273,10 +282,11 @@ Change: ${modeList}` };
         muted,
         updated_at: new Date().toISOString(),
       });
+      recordGroupMute(msg.groupId, muted);
       invalidateGroupSettingsCache(msg.groupId); // fresh state on very next message
       return {
         response: muted
-          ? "🔇 Seri da, mute pannitten. !unmute sollinaale tirupen."
+          ? "🔇 Seri da, 1 hour mute pannitten. !unmute sollinaale early-aa tirupen."
           : "🔊 Ennoda thadai neenga! Back-aa vaanden 🎉",
       };
     }
@@ -360,6 +370,20 @@ Change: ${modeList}` };
       return { response: handleSplit(args) };
     case "8ball":
       return { response: handle8Ball(args) };
+    case "riddle": {
+      const content = await generateContent(
+        `Generate ONE short Tamil-style riddle in Tanglish, with one clear answer. Make it feel like a fun WhatsApp group riddle, not a quiz question. Format exactly:
+RIDDLE: <riddle only>
+ANSWER: <answer only>`
+      );
+      const { riddle, answer } = splitRiddleResponse(content);
+      return {
+        response: `🧩 *RIDDLE TIME*\n\n${riddle}`,
+        additionalMessages: [
+          { text: `🧩 *Riddle Answer*\n\n${answer}`, delayMs: 20000 },
+        ],
+      };
+    }
 
     // Roast Meta AI
     case "roastmetaai":
@@ -941,95 +965,61 @@ Change: ${modeList}` };
 
     case "welcome":
     case "intro": {
-      const w1 = `🏏 *Fantasy League Bot — Welcome da!*
+      const w1 = `🤖 *TanglishBot — Welcome da!*
 
-Ennoda job: live IPL scores, fantasy leaderboard, group banter — eppavum ready.
+Enna command podra nu therinja podhum, naan group-la games, cricket updates, fun replies, polls, reminders, settings ellam handle panniduven.
 
-Two modes:
-📋 *!mode serious* — Clean cricket. Just facts.
-🔥 *!mode roast* — Kuthu energy. Slight vulgarity. Cricket only.
+*Modes:*
+!mode nanban — Warm support
+!mode roast — Savage banter
+!mode peter — Broken English over-explain
+!mode paati — Paati scolding with love`;
+      const w2 = `🎲 *Games Available*
 
-Default is *serious mode*. Switch anytime.`;
-      const w2 = `🎮 *How to Play — IPL Fantasy (ipl11.vercel.app)*
-
-1️⃣ Sign up at *ipl11.vercel.app*
-2️⃣ Build a team of 11 players (₹100 credit budget)
-3️⃣ Pick Captain (2× pts) & Vice-Captain (1.5× pts)
-4️⃣ Lock in your team *before the match starts*
-5️⃣ Watch your points roll in live 🚀
-
-*Team rules:*
-• Min 1 WK, 1 BAT, 1 BOWL, 1 AR | Max 7 from same team
-• ₹100 credit limit | Captain ≠ Vice-Captain
-
-Use *!fantasy join* to get the contest invite code for this group.`;
-      const w3 = `📊 *TATA IPL Scoring Rules*
-
-*🏏 Batting*
-Run → +1 | 4 → +1 | 6 → +2
-30-run bonus → +4 | 50 → +8 | 100 → +16
-Duck (out for 0) → −2
-SR penalty: SR<70 → −6pts | SR<60 → −10pts (10+ balls faced)
-
-*🎯 Bowling*
-Wicket → +25 | Maiden → +8
-Economy ≤6 → +6 | ≤7 → +4 | ≤8 → +2
-
-*🤝 Fielding*
-Catch → +8 | Stumping → +12
-Run-out direct → +12 | Run-out indirect → +6
-
-*👑 Multipliers*
-Captain = 2× all points | Vice-Captain = 1.5× all points`;
-      const w4 = `⚡ *Bot Commands*
+!quiz — Tamil movie emoji quiz
+!wordle — Guess Tamil movie title
+!trivia — Tamil Nadu trivia
+!riddle — Tamil riddle
+!fastfinger (!ff) — First to type wins
+!anagram — Unscramble
+!hangman — Co-op letter guessing
+!score — Weekly game leaderboard`;
+      const w3 = `⚡ *Useful Commands*
 
 *Cricket:*
 !cricket — Live scores
 !cricket alerts on/off — Auto score alerts
 !news ipl — IPL headlines
 
-*Fantasy:*
-!fantasy join — Contest invite link
-!fl — Live leaderboard (shortcut)
-!fantasy xi — Playing XI (after toss)
-!fantasy score <player> — Player points
-!fantasy stats — Top performers
-
-*Solli Adi (over prediction game):*
-!solli — Start prediction for next over
-!predict <runs> — Submit your guess
-!solli lb — Solli Adi leaderboard
-
 *Polls & Utility:*
-!poll <question> / !vote <n>
-!toss | !split <amount> <people> | !8ball <question>`;
-      const w5 = `🎲 *Games Available*
+!poll <question>
+!vote <n>
+!toss
+!split <amount> <people>
+!8ball <question>
 
-!quiz — Tamil movie emoji quiz
-!wordle — Guess Tamil movie title (6 tries)
-!fastfinger (!ff) — First to type wins
-!trivia — Tamil Nadu trivia
-!riddle — Tamil riddle
-!score — Weekly game leaderboard
+*Fun:*
+!roast <name>
+!movie [mood/name]
+!rank <topic>
+!vibecheck`;
+      const w4 = `🛠️ *Settings & Help*
 
-🛠️ *Settings & Help*
-
-!mode serious/roast — Switch bot personality
-!mute / !unmute — Silence bot for 1 hour
+!mode nanban/roast/peter/paati — Switch bot personality
+!mute - mute for 1 hour (!unmute to end early)
 !help — Full command list
 
 🐛 *Report a Bug*
 !bug <description>
-Example: !bug fantasy leaderboard not loading
+Example: !bug wordle not accepting answer
 
-Good luck with your fantasy team da! May your captain not DNB 🏏`;
+Use !help anytime for the full command list.`;
       return {
         response: w1,
         additionalMessages: [
           { text: w2, delayMs: 600 },
           { text: w3, delayMs: 600 },
           { text: w4, delayMs: 600 },
-          { text: w5, delayMs: 600 },
         ],
       };
     }

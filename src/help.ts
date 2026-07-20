@@ -21,6 +21,7 @@ const PUBLIC_SECTIONS: HelpSection[] = [
     heading: "🎮 *Games:*",
     lines: [
       "  !quiz — Tamil movie emoji quiz",
+      "  !riddle - Tamil riddle",
       "  !trivia — Tamil Nadu trivia",
       "  !brandquiz / !logoquiz — Guess the Indian brand",
       "  !fastfinger (!ff) — First to type the word wins",
@@ -162,7 +163,7 @@ const PUBLIC_SECTIONS: HelpSection[] = [
     lines: [
       "  !mode roast / nanban / peter / paati",
       "  !clone — Consent-gated voice clone enrollment/audio replies",
-      "  !mute — Mute bot for 1 hour",
+      "  !mute - mute for 1 hour (!unmute to end early)",
       "  !unmute — Resume bot",
     ],
   },
