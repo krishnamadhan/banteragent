@@ -110,7 +110,7 @@ read()
 
       case "restart": {
         const svc = args[0];
-        const allowed = ["banteragent", "bug-watcher", "battery-monitor"];
+        const allowed = ["banteragent", "battery-monitor"];
         if (!svc) { reply = `Usage: !restart <service>\nAllowed: ${allowed.join(", ")}`; break; }
         if (!allowed.includes(svc)) { reply = `Unknown service. Allowed: ${allowed.join(", ")}`; break; }
         await execAsync(`pm2 restart ${svc}`);
@@ -214,7 +214,7 @@ read()
 
 BanterAgent — /home/pi/banteragent/
   Source: src/ (TypeScript, ESM). Build: cd /home/pi/banteragent && npm run build
-  Deploy after build: pm2 restart banteragent
+  Restart banteragent only if the task explicitly requires immediate activation; otherwise ship dormant (activates on next restart)
   Bug tracker: /home/pi/banteragent/bugs.md
   Config: /home/pi/banteragent/.env
   Internal API:
@@ -233,13 +233,13 @@ IPL Fantasy — /home/pi/ipl-fantasy/ (Next.js 16, Supabase, Tailwind)
 
 BSPL Cricket Sim — /home/pi/bspl/ (Next.js, Supabase, not deployed)
 
-Robot — /home/pi/robot/ and /home/pi/robot_move.py
+Robot — /home/pi/robot/
 
 ## Scripts & Logs
   Scripts: /home/pi/scripts/
   Logs:    /home/pi/logs/
-  Scheduled bug fixer: /home/pi/scripts/scheduled-bug-fixer.sh (runs every 30 min via pi-scheduler)
-  Apply-fix: /home/pi/banteragent/src/apply-fix.sh
+  Scheduled bug fixer: /home/pi/scripts/scheduled-bug-fixer.sh (disabled)
+  Apply-fix: /home/pi/scripts/apply-fix.sh
 
 ## Sending WhatsApp from shell
   curl -s -X POST http://127.0.0.1:3099/notify \\
