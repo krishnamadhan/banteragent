@@ -375,6 +375,141 @@ async function taskFantasyEnforceDeadlines(_groupId: string) {
   await enforceDeadlines();
 }
 
+type MonitorEvent = {
+  t?: string;
+  ev?: string;
+  task?: string;
+  sent?: boolean;
+  ok?: boolean;
+  dur_ms?: number;
+  svc?: string;
+  status?: number;
+  error?: string;
+  msg?: string;
+};
+
+type WeeklyTaskStats = {
+  fired: number;
+  ended: number;
+  sent: number;
+  errors: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readMonitorEvents(fsMod: typeof import("fs"), hours: number): MonitorEvent[] {
+  const logFile = "/home/pi/logs/monitor.jsonl";
+  if (!fsMod.existsSync(logFile)) return [];
+
+  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+  return fsMod.readFileSync(logFile, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const raw = asRecord(JSON.parse(line));
+        if (!raw) return [];
+        const t = asString(raw.t);
+        if (!t || new Date(t).getTime() < cutoff) return [];
+        return [{
+          t,
+          ev: asString(raw.ev),
+          task: asString(raw.task),
+          sent: typeof raw.sent === "boolean" ? raw.sent : undefined,
+          ok: typeof raw.ok === "boolean" ? raw.ok : undefined,
+          dur_ms: asNumber(raw.dur_ms),
+          svc: asString(raw.svc),
+          status: asNumber(raw.status),
+          error: asString(raw.error),
+          msg: asString(raw.msg),
+        }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function pct(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
+}
+
+function buildWeeklyMonitorStats(fsMod: typeof import("fs")): string[] {
+  const events = readMonitorEvents(fsMod, 168);
+  if (!events.length) return [];
+
+  const tasks = new Map<string, WeeklyTaskStats>();
+  const botMsgs = events.filter((e) => e.ev === "msg_sent" && e.t);
+  const userMsgs = events.filter((e) => e.ev === "group_msg" && e.t);
+  const apiCalls = events.filter((e) => e.ev === "api_call");
+  const errorEvents = events.filter((e) => e.ev === "error" || (e.ev === "task_end" && e.ok === false));
+
+  for (const e of events) {
+    if ((e.ev !== "task_start" && e.ev !== "task_end") || !e.task) continue;
+    const row = tasks.get(e.task) ?? { fired: 0, ended: 0, sent: 0, errors: 0 };
+    if (e.ev === "task_start") row.fired += 1;
+    if (e.ev === "task_end") {
+      row.ended += 1;
+      if (e.sent) row.sent += 1;
+      if (e.ok === false) row.errors += 1;
+    }
+    tasks.set(e.task, row);
+  }
+
+  const totals = [...tasks.values()].reduce((acc, row) => ({
+    fired: acc.fired + row.fired,
+    ended: acc.ended + row.ended,
+    sent: acc.sent + row.sent,
+    errors: acc.errors + row.errors,
+  }), { fired: 0, ended: 0, sent: 0, errors: 0 });
+
+  const engagedPosts = botMsgs.filter((botMsg) => {
+    const botTime = new Date(botMsg.t!).getTime();
+    return userMsgs.some((userMsg) => {
+      const userTime = new Date(userMsg.t!).getTime();
+      return userTime > botTime && userTime < botTime + 30 * 60 * 1000;
+    });
+  }).length;
+
+  const highDead = [...tasks.entries()]
+    .map(([task, row]) => ({
+      task,
+      fired: row.fired,
+      deadRate: pct(row.fired - row.sent, row.fired),
+    }))
+    .filter((row) => row.fired >= 5 && row.deadRate >= 90)
+    .sort((a, b) => b.deadRate - a.deadRate || b.fired - a.fired)
+    .slice(0, 3);
+
+  const apiErrors = apiCalls.filter((e) => Boolean(e.error) || (e.status !== undefined && e.status >= 400)).length;
+
+  const lines = [
+    "*Weekly stats (monitor, 7d)*",
+    `Tasks: ${totals.ended}/${totals.fired} completed · ${pct(totals.sent, totals.fired)}% sent output · ${totals.errors} task errors`,
+    `Msgs: ${botMsgs.length} bot · ${userMsgs.length} user · ${pct(engagedPosts, botMsgs.length)}% posts got replies`,
+    `API: ${apiCalls.length} calls · ${apiErrors} errors`,
+  ];
+
+  if (highDead.length) {
+    lines.push(`Dead cycles: ${highDead.map((row) => `${row.task} ${row.deadRate}%`).join(", ")}`);
+  }
+
+  if (errorEvents.length) {
+    lines.push(`Errors logged: ${errorEvents.length}`);
+  }
+
+  return lines;
+}
+
 async function taskPiHealthReport(groupId: string) {
   void groupId;
   const adminNum = userJid(process.env.PI_ADMIN_NUMBER ?? process.env.BOT_OWNER_PHONE);
@@ -396,6 +531,7 @@ async function taskPiHealthReport(groupId: string) {
   const allGood = tempOk && s.ram_percent < 80 && s.disk_percent < 80 && s.internet_ok && ba.status === "online";
   const { renderAiSpendSection } = await import("./pi-admin.js");
   const aiSpend = await renderAiSpendSection(1, 1);
+  const weeklyStats = new Date().getDay() === 1 ? buildWeeklyMonitorStats(fsMod) : [];
 
   const lines = [
     `*Daily Pi Report — ${d}*`,
@@ -409,6 +545,7 @@ async function taskPiHealthReport(groupId: string) {
     `Bot:     ${ba.status === "online" ? "Online ✅" : "DOWN 🚨"} (${ba.restarts ?? 0} restarts)`,
     "",
     aiSpend,
+    ...(weeklyStats.length ? ["", ...weeklyStats] : []),
     "",
     allGood ? "All systems healthy 🟢" : "⚠️ Check metrics above",
   ];
