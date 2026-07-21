@@ -625,6 +625,33 @@ Write each person's horoscope in 1 funny Tanglish line — be specific to their 
   addRecentMessage(groupId, `[Bot]: ${out}`);
 }
 
+// ─── HealthTrack scheduled tasks (AB-084) ─────────────────────────────────────
+// These run only in the health group (all other groups have them in disabledTasks).
+
+async function taskHealthDailyProvisional(groupId: string) {
+  const { getGroupConfig } = await import("./group-config.js");
+  if (!getGroupConfig(groupId).isHealthGroup) return;
+  const { runHealthDailyProvisional } = await import("./features/health/index.js");
+  const report = await runHealthDailyProvisional();
+  if (report) await sendMessage(groupId, report);
+}
+
+async function taskHealthDailyFinal(groupId: string) {
+  const { getGroupConfig } = await import("./group-config.js");
+  if (!getGroupConfig(groupId).isHealthGroup) return;
+  const { runHealthDailyFinal } = await import("./features/health/index.js");
+  const report = await runHealthDailyFinal();
+  if (report) await sendMessage(groupId, report);
+}
+
+async function taskHealthWeekly(groupId: string) {
+  const { getGroupConfig } = await import("./group-config.js");
+  if (!getGroupConfig(groupId).isHealthGroup) return;
+  const { runHealthWeekly } = await import("./features/health/index.js");
+  const report = await runHealthWeekly();
+  if (report) await sendMessage(groupId, report);
+}
+
 // ─── Central dispatcher ───────────────────────────────────────────────────────
 
 const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
@@ -652,7 +679,10 @@ const TASK_MAP: Record<string, (g: string) => Promise<void>> = {
   "fantasy-sync-live":       taskFantasySyncLive,
   "fantasy-leaderboard":     taskFantasyLeaderboard,
   "fantasy-enforce-deadlines": taskFantasyEnforceDeadlines,
-  "pi-health-report":        taskPiHealthReport,
+  "pi-health-report":           taskPiHealthReport,
+  "health-daily-provisional":   taskHealthDailyProvisional,
+  "health-daily-final":         taskHealthDailyFinal,
+  "health-weekly":              taskHealthWeekly,
 };
 
 // Tracks whether sendMessage was called during the current task
@@ -689,6 +719,7 @@ const ONCE_DAILY_TASKS = new Set([
   "finance-update", "news-morning", "birthday-check",
   "fantasy-morning-winners", "fantasy-schedule-sync", "fantasy-contest-create",
   "weekend-prompt", "monthly-recap", "pi-health-report",
+  "health-daily-provisional", "health-daily-final", "health-weekly",
 ]);
 const _taskRanOnDate = new Map<string, string>(); // "taskName:groupId" → IST date
 

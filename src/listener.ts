@@ -187,6 +187,26 @@ export async function handleMessage(client: any, rawMsg: any) {
     return;
   }
 
+  // ===== HEALTH GROUP ROUTING (AB-078) =====
+  // Health group uses its own handler — no Tanglish games/roast, full HealthTrack logic.
+  {
+    const { getGroupConfig } = await import("./group-config.js");
+    const groupCfg = getGroupConfig(msg.groupId);
+    if (groupCfg.isHealthGroup) {
+      if (isImage) {
+        const { handleHealthImage } = await import("./features/health/index.js");
+        handleHealthImage(rawMsg, senderPhone, text, msg.messageId, msg.groupId).catch(console.error);
+        return;
+      }
+      if (text) {
+        const { handleHealthMessage } = await import("./features/health/index.js");
+        handleHealthMessage(rawMsg, senderPhone, text, msg.messageId, msg.quotedMessageId).catch(console.error);
+        return;
+      }
+      return;
+    }
+  }
+
   // ===== CONSTRUCTION IMAGE SCAN (!fund / !add + image) =====
   if (isImage) {
     const cmd = text.trim().toLowerCase();

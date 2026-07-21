@@ -17,7 +17,7 @@
 //   fantasy-morning-winners) should run for every group that wants them.
 
 import { readFileSync } from "fs";
-import { buildMainModePrompt, buildIplModePrompt } from "./prompts.js";
+import { buildMainModePrompt, buildIplModePrompt, buildHealthModePrompt } from "./prompts.js";
 
 function readEnvFile(): Record<string, string> {
   try {
@@ -50,6 +50,7 @@ export interface GroupConfig {
   buildPrompt: (mode: string) => string;
   isExpenseGroup?: boolean;       // expense tracker group — different routing
   isConstructionGroup?: boolean;  // construction project fund tracker
+  isHealthGroup?: boolean;        // HealthTrack couples coach — different routing
   disabled?: boolean;             // bot fully ignores this group (v2: only Banter Squad + Construction active)
 }
 
@@ -160,8 +161,38 @@ const REGISTRY: GroupConfig[] = [
       "auto-game-drop", "morning-roast", "birthday-check", "news-morning",
       "fantasy-leaderboard", "fantasy-prematch-1530", "fantasy-prematch-1930",
       "fantasy-morning-winners", "cricket-alerts", "reminders-check",
+      "health-daily-provisional", "health-daily-final", "health-weekly",
     ]),
     buildPrompt: () => "You are a construction project fund tracker assistant. Be brief and accurate.",
+  },
+
+  // ── Inuma Fitness Tracker (HealthTrack couples coach) ─────────────────────────
+  // Ships dormant — activate after Madhan sets BOT_HEALTH_GROUP_ID in .env
+  {
+    groupId: resolveId("BOT_HEALTH_GROUP_ID"),
+    name: "Inuma Fitness Tracker",
+    defaultMode: "health",
+    modes: {
+      health: { description: "Health coach mode — tracks food, weight, sleep, steps." },
+    },
+    isHealthGroup: true,
+    disabledCommands: new Set<string>([
+      // No Tanglish games or roast here
+      "roast", "rb", "roastbattle", "quiz", "wordle", "detective", "ff",
+      "mostlikely", "storytime", "wyr", "2t1l", "twotruthsonelie",
+      "pushup", "fitboard", "ship", "dare", "gossip", "astro", "astromatch",
+      "dialect", "character", "charsort", "morning-roast", "horoscope",
+    ]),
+    disabledTasks: new Set<string>([
+      // All non-health scheduled content disabled
+      ...ADMIN_TASKS,
+      "horoscope", "word-of-day", "history", "movie-fact", "finance-update",
+      "weekly-awards", "weekend-prompt", "monthly-recap", "weekly-score-reset",
+      "auto-game-drop", "morning-roast", "birthday-check", "news-morning",
+      "fantasy-leaderboard", "fantasy-prematch-1530", "fantasy-prematch-1930",
+      "fantasy-morning-winners", "cricket-alerts", "reminders-check",
+    ]),
+    buildPrompt: buildHealthModePrompt,
   },
 
 ];
@@ -171,15 +202,12 @@ const FALLBACK: GroupConfig = { ...REGISTRY[0], groupId: "", name: "Unknown Grou
 
 export function getGroupConfig(groupId: string): GroupConfig {
   // Patch group IDs that were empty at startup — read live from .env so bot picks them
-  // up without a restart (e.g. construction group added after bot was already running).
+  // up without a restart (e.g. health group added after bot was already running).
   const live = readEnvFile();
   for (const cfg of REGISTRY) {
-    if (!cfg.groupId && cfg.isConstructionGroup) {
-      cfg.groupId = live["BOT_CONSTRUCTION_GROUP_ID"] ?? "";
-    }
-    if (!cfg.groupId && cfg.isExpenseGroup) {
-      cfg.groupId = live["BOT_EXPENSES_GROUP_ID"] ?? "";
-    }
+    if (!cfg.groupId && cfg.isConstructionGroup) cfg.groupId = live["BOT_CONSTRUCTION_GROUP_ID"] ?? "";
+    if (!cfg.groupId && cfg.isExpenseGroup)      cfg.groupId = live["BOT_EXPENSES_GROUP_ID"]     ?? "";
+    if (!cfg.groupId && cfg.isHealthGroup)       cfg.groupId = live["BOT_HEALTH_GROUP_ID"]       ?? "";
   }
   return REGISTRY.find(c => !c.disabled && c.groupId && c.groupId === groupId) ?? FALLBACK;
 }
@@ -190,7 +218,8 @@ export function getAllGroupIds(): string[] {
   const live = readEnvFile();
   for (const cfg of REGISTRY) {
     if (!cfg.groupId && cfg.isConstructionGroup) cfg.groupId = live["BOT_CONSTRUCTION_GROUP_ID"] ?? "";
-    if (!cfg.groupId && cfg.isExpenseGroup)     cfg.groupId = live["BOT_EXPENSES_GROUP_ID"]     ?? "";
+    if (!cfg.groupId && cfg.isExpenseGroup)      cfg.groupId = live["BOT_EXPENSES_GROUP_ID"]     ?? "";
+    if (!cfg.groupId && cfg.isHealthGroup)       cfg.groupId = live["BOT_HEALTH_GROUP_ID"]       ?? "";
   }
   return REGISTRY.filter(c => !c.disabled).map(c => c.groupId).filter(Boolean);
 }
