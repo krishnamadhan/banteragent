@@ -83,17 +83,38 @@ export async function handleMessage(client: any, rawMsg: any) {
   const isCloneAudio = isCloneVoiceNote(rawMsg);
   if (!text && !isVideoPushup && !isImage && !isSticker && !isCloneAudio) return;
 
-  const chat = await rawMsg.getChat();
-  const isGroup = chat.isGroup;
-  const contact = await rawMsg.getContact();
+  // getChat()/getContact() are puppeteer calls that intermittently throw an
+  // execution-context error ("Error handling message: r: r" via getChatById).
+  // Previously that abort killed the ENTIRE handler before command routing ran,
+  // so admin commands (!pi, owner-DM, !restart) silently died. Derive the chat
+  // context from the raw message instead so a flaky lookup can't break commands.
+  let chat: any = null;
+  try {
+    chat = await rawMsg.getChat();
+  } catch (e) {
+    console.warn("[listener] getChat failed; deriving context from rawMsg.from:", (e as Error)?.message);
+  }
 
-  const senderPhone = contact.id._serialized; // e.g. "919876543210@c.us"
-  const senderName = contact.pushname || contact.name || senderPhone.replace("@c.us", "");
+  const fromId: string = rawMsg.from ?? "";
+  const isGroup: boolean = chat ? !!chat.isGroup : fromId.endsWith("@g.us");
+
+  let contact: any = null;
+  try {
+    contact = await rawMsg.getContact();
+  } catch (e) {
+    console.warn("[listener] getContact failed; deriving sender from rawMsg:", (e as Error)?.message);
+  }
+
+  // In a group, rawMsg.author is the sender's JID; in a DM, rawMsg.from is the sender.
+  const senderPhone: string =
+    contact?.id?._serialized ?? (isGroup ? (rawMsg.author ?? fromId) : fromId); // e.g. "919876543210@c.us"
+  if (!senderPhone) return; // no way to identify sender — bail safely
+  const senderName: string = contact?.pushname || contact?.name || senderPhone.replace("@c.us", "");
 
   // Skip Meta AI messages — it's a bot, not a real person, no point responding to it
   if (senderName.toLowerCase().includes("meta ai")) return;
 
-  const groupId = isGroup ? chat.id._serialized : senderPhone;
+  const groupId: string = isGroup ? (chat?.id?._serialized ?? fromId) : senderPhone;
 
   // Fetch the quoted message once — it was fetched up to 3x per message before
   let quotedMsg: any = null;
