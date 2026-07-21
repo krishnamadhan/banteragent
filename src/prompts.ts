@@ -115,6 +115,13 @@ ${sharedRules()}`;
   }
 }
 
+// ── Health group prompt (thin wrapper) ────────────────────────────────────────────
+// The full persona lives in features/health/healthPrompts.ts, loaded per-request
+// with live profile data. This stub satisfies group-config.ts's buildPrompt type.
+export function buildHealthModePrompt(_mode: string): string {
+  return "You are a professional health coach. English only. Concise, evidence-based, encouraging. No Tanglish, no games.";
+}
+
 export function buildIplModePrompt(mode: string): string {
   const today = getISTDateString();
   switch (mode) {
